@@ -13,6 +13,7 @@ SERVICE_NAME = os.environ.get("SERVICE_NAME", "bootcamp-api")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 INTERNAL_TOKEN = os.environ.get("INTERNAL_TOKEN")
+JWT_SECRET = os.environ.get("JWT_SECRET")
 
 # A API de boletos: o serviço de fora que este projeto chama pra emitir
 # uma cobrança (veja src/connectors/). O endereço vem do ambiente, como
@@ -36,7 +37,7 @@ BYPASS_ENDPOINTS = [
     "/health_check",
 ]
 
-REQUIRED_VARIABLES = ["DATABASE_URL", "INTERNAL_TOKEN"]
+REQUIRED_VARIABLES = ["DATABASE_URL", "INTERNAL_TOKEN", "JWT_SECRET"]
 
 
 def check_variables():

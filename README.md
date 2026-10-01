@@ -23,6 +23,14 @@ curl -i http://localhost:3000/health_check
 
 A resposta esperada é `204 No Content`. O Docker executa `database/database.sql` quando cria um banco novo. Se você já tiver um banco local criado antes da adição das tabelas `clients` e `accounts`, será necessário criá-las nesse banco; editar o arquivo SQL não altera uma instalação existente.
 
+## Autenticação
+
+`POST /auth/login` recebe `email` e `password` e devolve um JWT de acesso válido por 15 minutos (`access_token`, `token_type` e `expires_in`). Credenciais incorretas retornam `401`.
+
+`GET /clients/me` exige `Authorization: Bearer <access_token>`. Retorna os dados do cliente identificado pelo token. Token ausente, inválido ou expirado retorna `401`.
+
+A chave `JWT_SECRET` é configuração local e não deve ser versionada. O token deve ser enviado no cabeçalho Authorization, nunca na URL.
+
 ## Cadastro de clientes
 
 `POST /clients` recebe:

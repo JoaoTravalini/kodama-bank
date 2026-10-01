@@ -21,6 +21,13 @@ class ClientRepository:
             .filter(Client.email == email)
             .first()
         )
+        
+    def get_by_key(self, client_key) -> Client | None:
+        return (
+            self.session.query(Client)
+            .filter(Client.client_key == client_key)
+            .first()
+        )
 
     def create(
         self,
