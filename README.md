@@ -131,6 +131,32 @@ O saldo é devolvido como **string decimal**, com duas casas, para preservar a r
 
 Uma conta de outro cliente recebe a mesma resposta de uma conta inexistente; a API não revela sua existência.
 
+## Depósito simulado
+
+`POST /accounts/{account_key}/deposits` simula uma entrada de dinheiro confirmada por um sistema interno. A rota exige o cabeçalho `INTERNAL-TOKEN`; o JWT do cliente não autoriza depósitos.
+
+```json
+{
+  "amount": "125.50",
+  "external_reference": "pagamento-cliente-001"
+}
+```
+
+O valor deve ser uma string decimal com duas casas e maior que zero. A referência externa identifica o pagamento. A API grava a operação, credita a conta e cria seu lançamento no mesmo commit.
+
+Repetir a mesma referência com os mesmos dados retorna a operação original (`201`) sem creditar novamente. Reutilizá-la com outro valor ou outra conta retorna `409` (`KOD004002`).
+
+| Caso | Status |
+|---|---:|
+| Depósito criado ou repetição idêntica | 201 |
+| Corpo fora do contrato | 400 |
+| Valor igual a zero ou saldo acima do limite | 422 |
+| Conta inexistente | 404 |
+| Referência usada com dados diferentes | 409 |
+| `INTERNAL-TOKEN` ausente ou incorreto | 403 |
+
+Esta é uma simulação para o desafio: a rota não recebe nem confirma dinheiro de uma instituição externa.
+
 ## Organização
 
 - `database/`: criação das tabelas no PostgreSQL.

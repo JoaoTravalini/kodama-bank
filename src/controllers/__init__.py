@@ -1,2 +1,3 @@
 from controllers.client_controller import ClientController
 from controllers.auth_controller import AuthController
+from resources.deposit import DepositResource
