@@ -19,7 +19,9 @@ def register_internal_token_middleware(application: FastAPI) -> None:
 
     @application.middleware("http")
     async def check_internal_token(request: Request, call_next):
-        is_public = request.url.path in BYPASS_ENDPOINTS
+        is_public = request.url.path in BYPASS_ENDPOINTS or (
+            request.url.path == "/clients" and request.method == "POST"
+        )
 
         if request.method == "OPTIONS" or is_public:
             return await call_next(request)

@@ -1,0 +1,28 @@
+{
+  "title": "PostClient",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "\\S"
+    },
+    "email": {
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    },
+    "document_number": {
+      "type": "string",
+      "pattern": "^(\\d{11}|\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})$"
+    },
+    "password": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 128
+    }
+  },
+  "required": ["name", "email", "document_number", "password"],
+  "additionalProperties": false
+}
