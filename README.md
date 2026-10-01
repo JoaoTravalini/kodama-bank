@@ -4,45 +4,44 @@ API bancária desenvolvida para o desafio do bootcamp QI Tech. O projeto está e
 
 ## Tecnologias
 
-Python 3.11, FastAPI, PostgreSQL, SQLAlchemy, Docker Compose e pytest.
+Python 3.11, FastAPI, PostgreSQL, SQLAlchemy, Docker Compose, PyJWT e pytest.
 
 ## Executar
 
-Na raiz do repositório:
+Na raiz do repositório, crie o arquivo local de configuração:
 
 ```bash
-docker compose up --build -d
+cp .env.example .env
+```
+
+Defina um valor aleatório para `JWT_SECRET` no `.env`. Você pode gerar um valor com:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+O `.env` contém configurações locais e não deve ser enviado ao GitHub.
+
+Suba a API e o PostgreSQL:
+
+```bash
+docker compose up -d --build
 docker compose ps
 ```
 
-A API fica disponível em `http://localhost:3000`. Verifique se está ativa:
+A API fica disponível em `http://localhost:3000`. Para conferir se está ativa:
 
 ```bash
 curl -i http://localhost:3000/health_check
 ```
 
-A resposta esperada é `204 No Content`. O Docker executa `database/database.sql` quando cria um banco novo. Se você já tiver um banco local criado antes da adição das tabelas `clients` e `accounts`, será necessário criá-las nesse banco; editar o arquivo SQL não altera uma instalação existente.
+A resposta esperada é `204 No Content`.
 
-## Autenticação
-
-`POST /auth/login` recebe `email` e `password` e devolve um JWT de acesso válido por 15 minutos (`access_token`, `token_type` e `expires_in`). Credenciais incorretas retornam `401`.
-
-`GET /clients/me` exige `Authorization: Bearer <access_token>`. Retorna os dados do cliente identificado pelo token. Token ausente, inválido ou expirado retorna `401`.
-
-A chave `JWT_SECRET` é configuração local e não deve ser versionada. O token deve ser enviado no cabeçalho Authorization, nunca na URL.
+O Docker executa `database/database.sql` somente ao inicializar um banco novo. Alterar esse arquivo não modifica automaticamente um banco já criado.
 
 ## Cadastro de clientes
 
-`POST /clients` recebe:
-
-```json
-{
-  "name": "Maria Silva",
-  "email": "maria@example.com",
-  "document_number": "529.982.247-25",
-  "password": "SenhaDeTeste123!"
-}
-```
+`POST /clients` cadastra um cliente e cria duas contas: `personal` e `professional`, ambas com saldo inicial zero.
 
 Exemplo no Git Bash:
 
@@ -52,7 +51,7 @@ curl -i -X POST http://localhost:3000/clients \
   -d '{"name":"Maria Silva","email":"maria@example.com","document_number":"529.982.247-25","password":"SenhaDeTeste123!"}'
 ```
 
-O cadastro cria uma conta `personal` e uma `professional`, ambas com saldo inicial zero. A resposta `201 Created` contém `client_key` e as chaves das contas. IDs internos e senha não são retornados.
+Uma resposta `201 Created` contém o `client_key` e o `account_key` de cada conta. IDs internos e senha não são retornados.
 
 | Caso | Status | Código |
 |---|---:|---|
@@ -62,27 +61,96 @@ O cadastro cria uma conta `personal` e uma `professional`, ambas com saldo inici
 | CPF já cadastrado | 409 | `KOD001002` |
 | E-mail já cadastrado | 409 | `KOD001003` |
 
-O CPF pode ser enviado com ou sem pontuação e é armazenado com 11 dígitos. O e-mail é normalizado para minúsculas. A senha é armazenada como hash com salt aleatório; o login com JWT ainda será implementado.
+O CPF pode ser enviado com ou sem pontuação e é armazenado com 11 dígitos. O e-mail é normalizado para minúsculas. A senha é armazenada como hash com salt aleatório.
+
+## Autenticação
+
+`POST /auth/login` recebe o e-mail e a senha cadastrados:
+
+```bash
+curl -i -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"maria@example.com","password":"SenhaDeTeste123!"}'
+```
+
+A resposta contém `access_token`, `token_type` e `expires_in`. O token é um JWT válido por 15 minutos. E-mail inexistente e senha incorreta recebem a mesma resposta `401`.
+
+As rotas do cliente autenticado exigem o cabeçalho:
+
+```text
+Authorization: Bearer <access_token>
+```
+
+`GET /clients/me` retorna os dados do cliente identificado pelo token, incluindo as chaves e os tipos de suas contas. Token ausente, inválido ou expirado retorna `401` com o código `KOD002002`.
+
+`JWT_SECRET` é uma configuração local e não deve ser versionada. Envie o token no cabeçalho `Authorization`, nunca na URL.
+
+## Consulta de contas
+
+`GET /accounts` lista as contas do cliente autenticado e seus saldos:
+
+```bash
+curl -i http://localhost:3000/accounts \
+  -H "Authorization: Bearer SEU_ACCESS_TOKEN"
+```
+
+Exemplo de resposta:
+
+```json
+{
+  "accounts": [
+    {
+      "account_key": "11111111-1111-4111-8111-111111111111",
+      "type": "personal",
+      "balance": "0.00"
+    },
+    {
+      "account_key": "22222222-2222-4222-8222-222222222222",
+      "type": "professional",
+      "balance": "0.00"
+    }
+  ]
+}
+```
+
+`GET /accounts/{account_key}` consulta uma conta específica:
+
+```bash
+curl -i http://localhost:3000/accounts/11111111-1111-4111-8111-111111111111 \
+  -H "Authorization: Bearer SEU_ACCESS_TOKEN"
+```
+
+O saldo é devolvido como **string decimal**, com duas casas, para preservar a representação monetária. A API consulta somente contas pertencentes ao cliente identificado pelo JWT.
+
+| Caso | Status | Código |
+|---|---:|---|
+| Consulta realizada | 200 | — |
+| Token ausente ou inválido | 401 | `KOD002002` |
+| Conta inexistente ou pertencente a outro cliente | 404 | `KOD003001` |
+| `account_key` fora do formato UUID | 400 | `QIT000010` |
+
+Uma conta de outro cliente recebe a mesma resposta de uma conta inexistente; a API não revela sua existência.
 
 ## Organização
 
 - `database/`: criação das tabelas no PostgreSQL.
-- `src/schemas/`: formato aceito nas requisições.
-- `src/resources/`: entrada e saída HTTP.
-- `src/controllers/`: regras de negócio.
+- `src/schemas/`: formatos aceitos nas requisições com corpo JSON.
+- `src/resources/`: entrada HTTP e montagem das respostas.
+- `src/controllers/`: autenticação e regras de negócio.
 - `src/repositories/`: consultas e gravações no banco.
 - `src/models/`: representação das tabelas em Python.
 - `src/errors/`: erros padronizados.
 - `src/middlewares/`: processamento comum às requisições.
-- `src/utils/`: funções auxiliares.
-- `tests/`: testes da API.
+- `src/utils/`: funções auxiliares, incluindo hash de senha e JWT.
+- `tests/`: testes de integração da API.
 
 ## Testes
 
-Com os containers ativos, instale as dependências de desenvolvimento em um ambiente virtual Python 3.11 e execute no Git Bash:
+Com os containers ativos e o ambiente virtual Python 3.11 ativado, execute no Git Bash:
 
 ```bash
+source .venv/Scripts/activate
 SERVER_LOCALHOST=127.0.0.1 python -m pytest -v tests/integration
 ```
 
-Os testes de cadastro enviam requisições HTTP à API e verificam os dados no PostgreSQL. Eles inserem clientes fictícios no banco local.
+Os testes enviam requisições HTTP para a API em execução. Eles verificam cadastro, autenticação, consulta das próprias contas, bloqueio de acesso a contas de outros clientes e comportamento dos erros. Os testes criam clientes fictícios no banco local.

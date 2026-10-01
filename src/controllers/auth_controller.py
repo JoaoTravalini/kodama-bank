@@ -2,6 +2,8 @@ from uuid import UUID
 
 import jwt
 
+from models.client import Client
+
 from controllers.base_controller import BaseController
 from errors.auth_errors import InvalidAccessToken, InvalidCredentials
 from repositories.client_repository import ClientRepository
@@ -37,7 +39,7 @@ class AuthController(BaseController):
             "expires_in": ACCESS_TOKEN_SECONDS,
         }
 
-    def get_current_client(self, authorization: str | None) -> dict:
+    def authenticate(self, authorization: str | None) -> Client:
         if not authorization:
             raise InvalidAccessToken()
 
@@ -53,6 +55,11 @@ class AuthController(BaseController):
         client = self.repository.get_by_key(client_key)
         if client is None:
             raise InvalidAccessToken()
+
+        return client
+
+    def get_current_client(self, authorization: str | None) -> dict:
+        client = self.authenticate(authorization)
 
         return {
             "client_key": str(client.client_key),

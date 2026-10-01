@@ -25,6 +25,12 @@ def register_internal_token_middleware(application: FastAPI) -> None:
             request.url.path == "/auth/login" and request.method == "POST"
         ) or (
             request.url.path == "/clients/me" and request.method == "GET"
+        ) or (
+            request.method == "GET"
+            and (
+                request.url.path == "/accounts"
+                or request.url.path.startswith("/accounts/")
+            )
         )
 
         if request.method == "OPTIONS" or is_public:
