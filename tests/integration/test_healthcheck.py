@@ -1,4 +1,6 @@
-from tests.utils import INTERNAL_TOKEN
+from os import environ
+
+INTERNAL_TOKEN = environ.get("INTERNAL_TOKEN", "default_token")
 from tests.utils.requisition import ClientRequisition
 
 
