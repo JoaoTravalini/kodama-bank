@@ -79,3 +79,18 @@ services:
       timeout: 3s
       retries: 20
 
+  worker:
+    build:
+      context: .
+      target: api
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@db:5432/bootcamp
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_NAME: kodama-bank-worker
+    volumes:
+      - ./src:/app
+    command: python -m workers.transfer_worker
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped

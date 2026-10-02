@@ -14,8 +14,7 @@ from errors.deposit_errors import (
 from models.transaction import AccountEntry, Transaction
 from repositories.deposit_repository import DepositRepository
 
-
-MAX_BALANCE = Decimal("9999999999999999.99")
+from utils.money import MAX_BALANCE
 
 
 class DepositController(BaseController):

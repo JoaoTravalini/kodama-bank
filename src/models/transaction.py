@@ -21,6 +21,7 @@ class Transaction(Base):
     )
     idempotency_key = Column(UUID(as_uuid=True))
     external_reference = Column(String(100), unique=True)
+    rejection_reason = Column(String(40))
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     completed_at = Column(DateTime)
 

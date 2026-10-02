@@ -35,6 +35,7 @@ class TransferController(BaseController):
             "status": transaction.status,
             "amount": format(transaction.amount, ".2f"),
             "fee": format(transaction.fee, ".2f"),
+            "rejection_reason": transaction.rejection_reason,
         }
 
     def _repeat_or_conflict(
