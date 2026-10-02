@@ -4,3 +4,4 @@ from errors.client_errors import *
 from errors.auth_errors import *
 from errors.account_errors import *
 from errors.deposit_errors import *
+from errors.transfer_errors import *
