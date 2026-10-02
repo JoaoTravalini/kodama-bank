@@ -5,6 +5,8 @@ from fastapi.responses import JSONResponse
 
 from controllers.account_controller import AccountController
 
+from utils.schema_handler import SchemaHandler
+
 
 class AccountResource:
     def on_get_list(self, request: Request) -> JSONResponse:
@@ -21,5 +23,20 @@ class AccountResource:
         result = AccountController().get_account(
             request.headers.get("Authorization"),
             account_key,
+        )
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    
+    @SchemaHandler.validate_query_params("get_account_entries.json")
+    def on_get_entries(
+        self,
+        request: Request,
+        account_key: UUID,
+    ) -> JSONResponse:
+        result = AccountController().list_entries(
+            authorization=request.headers.get("Authorization"),
+            account_key=account_key,
+            page=int(request.query_params.get("page", "1")),
+            limit=int(request.query_params.get("limit", "20")),
+            kind=request.query_params.get("kind"),
         )
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)

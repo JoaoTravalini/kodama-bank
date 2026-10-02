@@ -177,6 +177,11 @@ def create_app() -> FastAPI:
         transfer_resource.on_get,
         methods=["GET"],
     )
+    application.add_api_route(
+        "/accounts/{account_key}/entries",
+        account_resource.on_get_entries,
+        methods=["GET"],
+    )
 
     register_error_handlers(application)
 
