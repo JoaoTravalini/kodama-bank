@@ -132,3 +132,44 @@ def test_worker_completes_transfer_over_http():
     )
     assert repeated.response_status == 200
     assert repeated.response_json["transaction_key"] == transaction_key
+    
+    assert repeated.response_json["status"] == "COMPLETED"
+
+    source_after_retry = send(
+        "GET", f"/accounts/{source_key}", headers=bearer(sender_token)
+    )
+    destination_after_retry = send(
+        "GET",
+        f"/accounts/{destination_key}",
+        headers=bearer(recipient_token),
+    )
+    assert source_after_retry.response_status == 200
+    assert destination_after_retry.response_status == 200
+    assert source_after_retry.response_json["balance"] == "59.80"
+    assert destination_after_retry.response_json["balance"] == "40.00"
+
+    source_entries_after_retry = send(
+        "GET",
+        f"/accounts/{source_key}/entries",
+        headers=bearer(sender_token),
+    )
+    destination_entries_after_retry = send(
+        "GET",
+        f"/accounts/{destination_key}/entries",
+        headers=bearer(recipient_token),
+    )
+    assert source_entries_after_retry.response_status == 200
+    assert destination_entries_after_retry.response_status == 200
+
+    assert [
+        (entry["kind"], entry["amount"])
+        for entry in source_entries_after_retry.response_json["entries"]
+    ] == [
+        ("FEE", "-0.20"),
+        ("DEBIT", "-40.00"),
+        ("CREDIT", "100.00"),
+    ]
+    assert [
+        (entry["kind"], entry["amount"])
+        for entry in destination_entries_after_retry.response_json["entries"]
+    ] == [("CREDIT", "40.00")]
