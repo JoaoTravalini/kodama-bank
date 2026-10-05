@@ -204,7 +204,9 @@ docker compose stop worker
 PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/integration
 PYTHONPATH=src python -m pytest -q tests/unit/test_transfer_fee.py
 docker compose start worker
+PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/e2e/test_transfer_worker.py
 ```
+Na CI, os testes de integração e de unidade rodam antes de iniciar o worker; o teste de ponta a ponta roda depois, com os três serviços ligados.
 
 Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rotina recria apenas o esquema inicial e pode remover tabelas acrescentadas pelas migrações.
 

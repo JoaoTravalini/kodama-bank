@@ -15,9 +15,9 @@ jobs:
       PYTHONPATH: src
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -40,6 +40,12 @@ jobs:
 
       - name: Rodar testes
         run: python -m pytest -q tests/integration tests/unit
+
+      - name: Iniciar worker
+        run: docker compose up -d --build worker
+
+      - name: Testar transferencia completa por HTTP
+        run: python -m pytest -q tests/e2e/test_transfer_worker.py
 
       - name: Mostrar logs se houver falha
         if: failure()
