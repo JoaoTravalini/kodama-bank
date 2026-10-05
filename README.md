@@ -34,7 +34,7 @@ O processamento usa transação no banco e bloqueio das linhas envolvidas. Assim
 
 ## Executar localmente
 
-Crie um arquivo `.env` na raiz do projeto com um segredo JWT próprio:
+Para testar localmente, o `.env` é opcional: o Docker Compose usa uma chave JWT de demonstração. Para usar seus próprios segredos, crie um arquivo `.env` na raiz do projeto com:
 
 ```dotenv
 JWT_SECRET=SUBSTITUA_POR_UM_SEGREDO_ALEATORIO_LONGO

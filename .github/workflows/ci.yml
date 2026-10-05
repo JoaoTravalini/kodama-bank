@@ -45,7 +45,7 @@ jobs:
         run: docker compose up -d --build worker
 
       - name: Testar transferencia completa por HTTP
-        run: python -m pytest -q tests/e2e/test_transfer_worker.py
+        run: python -m pytest -q tests/e2e
 
       - name: Mostrar logs se houver falha
         if: failure()
