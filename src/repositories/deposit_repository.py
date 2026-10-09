@@ -3,6 +3,7 @@ from uuid import UUID
 from database import Context
 from models.client import Account
 from models.transaction import AccountEntry, Transaction
+from models.service_charge import ServiceCharge
 
 
 class DepositRepository:
@@ -34,5 +35,16 @@ class DepositRepository:
                 AccountEntry.transaction_id == transaction_id,
                 AccountEntry.kind == "CREDIT",
             )
+            .first()
+        )
+
+    def get_charge_for_update(
+        self,
+        charge_key: UUID,
+    ) -> ServiceCharge | None:
+        return (
+            self.session.query(ServiceCharge)
+            .filter(ServiceCharge.charge_key == charge_key)
+            .with_for_update()
             .first()
         )

@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "page": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,5}$"
+    },
+    "limit": {
+      "type": "string",
+      "pattern": "^([1-9]|[1-9][0-9]|100)$"
+    }
+  }
+}

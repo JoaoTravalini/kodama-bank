@@ -9,7 +9,7 @@ from middlewares import (
     register_request_logger_middleware,
     register_session_manager_middleware,
 )
-from resources import AccountResource, AuthResource, ClientResource, HealthCheckResource, DepositResource, TransferResource
+from resources import AccountResource, AuthResource, ClientResource, HealthCheckResource, DepositResource, TransferResource, ServiceChargeResource
 from utils.logger import setup_logging
 
 
@@ -128,6 +128,7 @@ def create_app() -> FastAPI:
     account_resource = AccountResource()
     deposit_resource = DepositResource()
     transfer_resource = TransferResource()
+    service_charge_resource = ServiceChargeResource()
 
     application.add_api_route("/", health_check_resource.on_get_home, methods=["GET"])
     application.add_api_route(
@@ -135,13 +136,13 @@ def create_app() -> FastAPI:
         health_check_resource.on_get_health_check,
         methods=["GET"]
     )
-    
+
     application.add_api_route(
         "/clients",
         client_resource.on_post,
         methods=["POST"],
     )
-    
+
     application.add_api_route(
         "/auth/login",
         auth_resource.on_post_login,
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
         deposit_resource.on_post,
         methods=["POST"],
     )
+
     application.add_api_route(
         "/accounts/{source_account_key}/transfers",
         transfer_resource.on_post,
@@ -180,6 +182,22 @@ def create_app() -> FastAPI:
     application.add_api_route(
         "/accounts/{account_key}/entries",
         account_resource.on_get_entries,
+        methods=["GET"],
+    )
+
+    application.add_api_route(
+        "/accounts/{account_key}/charges",
+        service_charge_resource.on_post,
+        methods=["POST"],
+    )
+    application.add_api_route(
+        "/accounts/{account_key}/charges",
+        service_charge_resource.on_get_list,
+        methods=["GET"],
+    )
+    application.add_api_route(
+        "/accounts/{account_key}/charges/{charge_key}",
+        service_charge_resource.on_get,
         methods=["GET"],
     )
 

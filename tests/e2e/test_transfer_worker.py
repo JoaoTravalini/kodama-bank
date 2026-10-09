@@ -132,7 +132,6 @@ def test_worker_completes_transfer_over_http():
     )
     assert repeated.response_status == 200
     assert repeated.response_json["transaction_key"] == transaction_key
-    
     assert repeated.response_json["status"] == "COMPLETED"
 
     source_after_retry = send(

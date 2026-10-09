@@ -4,3 +4,4 @@ from resources.auth import AuthResource
 from resources.account import AccountResource
 from resources.deposit import DepositResource
 from resources.transfer import TransferResource
+from resources.service_charge import ServiceChargeResource

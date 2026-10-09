@@ -11,9 +11,9 @@ from errors.deposit_errors import (
     DepositReferenceConflict,
     InvalidDepositAmount,
 )
+from errors.service_charge_errors import ServiceChargePaymentConflict
 from models.transaction import AccountEntry, Transaction
 from repositories.deposit_repository import DepositRepository
-
 from utils.money import MAX_BALANCE
 
 
@@ -56,6 +56,39 @@ class DepositController(BaseController):
 
         return self._response(existing, account_key, entry)
 
+    def _charge_for_reference(
+        self,
+        external_reference: str,
+        account_id: int,
+        amount: Decimal,
+    ):
+        if not external_reference.startswith("charge:"):
+            return None
+
+        try:
+            charge_key = UUID(external_reference[len("charge:"):])
+        except ValueError:
+            raise ServiceChargePaymentConflict() from None
+
+        charge = self.repository.get_charge_for_update(charge_key)
+
+        if (
+            charge is None
+            or charge.account_id != account_id
+            or charge.amount != amount
+        ):
+            raise ServiceChargePaymentConflict()
+
+        return charge
+
+    @staticmethod
+    def _check_repeated_charge_payment(charge, existing: Transaction) -> None:
+        if charge is not None and (
+            charge.status != "PAID"
+            or charge.paid_transaction_id != existing.id
+        ):
+            raise ServiceChargePaymentConflict()
+
     def create(self, account_key: UUID, payload: dict) -> dict:
         amount = Decimal(payload["amount"])
         external_reference = payload["external_reference"]
@@ -68,15 +101,26 @@ class DepositController(BaseController):
             raise AccountNotFound()
 
         account_id = account.id
+        charge = self._charge_for_reference(
+            external_reference,
+            account_id,
+            amount,
+        )
 
-        existing = self.repository.get_by_external_reference(external_reference)
+        existing = self.repository.get_by_external_reference(
+            external_reference
+        )
         if existing is not None:
+            self._check_repeated_charge_payment(charge, existing)
             return self._repeat_or_conflict(
                 existing,
                 account_id,
                 account_key,
                 amount,
             )
+
+        if charge is not None and charge.status != "OPEN":
+            raise ServiceChargePaymentConflict()
 
         new_balance = account.balance + amount
         if new_balance > MAX_BALANCE:
@@ -111,6 +155,11 @@ class DepositController(BaseController):
             )
             self.session.add(entry)
 
+            if charge is not None:
+                charge.status = "PAID"
+                charge.paid_transaction_id = transaction.id
+                charge.paid_at = func.now()
+
             response = self._response(transaction, account_key, entry)
             self.session.commit()
             return response
@@ -124,14 +173,17 @@ class DepositController(BaseController):
                 None,
             )
 
-            # Duas requisições podem usar a mesma referência ao mesmo tempo,
-            # inclusive apontando para contas diferentes. O UNIQUE no banco
-            # decide qual entrou; esta consulta interpreta o resultado.
             if constraint == "transactions_external_reference_key":
                 existing = self.repository.get_by_external_reference(
                     external_reference
                 )
                 if existing is not None:
+                    charge = self._charge_for_reference(
+                        external_reference,
+                        account_id,
+                        amount,
+                    )
+                    self._check_repeated_charge_payment(charge, existing)
                     return self._repeat_or_conflict(
                         existing,
                         account_id,

@@ -6,3 +6,4 @@ FROM postgres:16
 COPY database.sql /docker-entrypoint-initdb.d/01.sql
 COPY migrations/002_transactions.sql /docker-entrypoint-initdb.d/02.sql
 COPY migrations/003_transfer_rejection_reason.sql /docker-entrypoint-initdb.d/03.sql
+COPY migrations/004_service_charges.sql /docker-entrypoint-initdb.d/04.sql
