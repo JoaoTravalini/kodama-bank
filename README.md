@@ -1,6 +1,6 @@
 # Kodama Bank
 
-API bancária para profissionais autônomos. O projeto implementa cadastro, autenticação, contas pessoal e profissional, depósitos simulados, transferências, extrato e acompanhamento de cobranças por serviços prestados.
+API bancária para profissionais autônomos. O projeto implementa cadastro, autenticação, contas pessoal e profissional, depósitos simulados, transferências, extrato, acompanhamento de cobranças por serviços prestados e conciliação interna.
 
 > Este é um projeto demonstrativo. Depósitos e pagamentos de cobranças são simulados: a aplicação não emite boletos, não realiza Pix e não movimenta dinheiro real.
 
@@ -19,6 +19,7 @@ API bancária para profissionais autônomos. O projeto implementa cadastro, aute
 - Registro e consulta de cobranças por serviços na conta profissional.
 - Quitação simulada de cobranças, vinculando cobrança, depósito, saldo e extrato.
 - Agenda de recebíveis com vencimento opcional, identificação de atrasos e resumo de valores abertos, atrasados e pagos.
+- Conciliação interna protegida por `INTERNAL-TOKEN`, que identifica divergências entre saldo, lançamentos e cobranças pagas.
 
 ## Fluxos principais
 
@@ -43,6 +44,12 @@ O processamento usa uma transação de banco e bloqueia as linhas envolvidas. Um
 Uma referência de cobrança desconhecida, uma conta diferente ou um valor divergente são recusados sem movimentar o saldo. O cliente pode consultar suas cobranças com JWT, mas quitar uma cobrança exige `INTERNAL-TOKEN`.
 
 Uma cobrança `OPEN` com vencimento anterior à data atual em São Paulo aparece com `overdue: true`; ela continua `OPEN` no banco. Vencimento no dia atual ainda não é atraso. Depois do pagamento, `overdue` passa a `false`. O resumo de recebíveis soma todas as cobranças da conta profissional, independentemente da paginação da listagem; `overdue` é um subconjunto de `open`.
+
+### Conciliação interna
+
+Uma rota interna consulta uma conta e compara seu saldo armazenado com a soma dos lançamentos do extrato. Para cada cobrança `PAID`, também verifica se existe um depósito concluído com a conta, o valor e a referência esperados, além do lançamento de crédito correspondente.
+
+A consulta usa uma visão consistente dos dados durante essas verificações e não altera saldos ou cobranças. Quando encontra uma divergência, devolve `consistent: false` e a lista de problemas detectados. Essa conciliação verifica os registros **dentro do Kodama Bank**; ela não comprova que houve um pagamento em uma instituição externa.
 
 ## Requisitos
 
@@ -95,7 +102,7 @@ Em seguida, se ainda não possui a coluna `due_date`, aplique:
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/005_charge_due_date.sql
 ```
 
-A migração `005` também pode ser executada novamente sem duplicar a coluna.
+A migração `005` também pode ser executada novamente sem duplicar a coluna. A conciliação interna não exige uma nova migração.
 
 ## Rotas
 
@@ -115,8 +122,9 @@ A migração `005` também pode ser executada novamente sem duplicar a coluna.
 | `GET` | `/accounts/{account_key}/charges` | JWT | Lista as cobranças da conta |
 | `GET` | `/accounts/{account_key}/charges/summary` | JWT | Resume os recebíveis da conta profissional |
 | `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta uma cobrança |
+| `GET` | `/internal/accounts/{account_key}/reconciliation` | `INTERNAL-TOKEN` | Verifica a consistência interna da conta e das cobranças pagas |
 
-Nas rotas do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente.
+Nas rotas do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente. A rota de conciliação é interna e exige `INTERNAL-TOKEN`; o JWT do cliente não a autoriza.
 
 ### Cadastro
 
@@ -296,6 +304,30 @@ Exemplo de resposta:
 
 `CREDIT` aumenta o saldo; `DEBIT` e `FEE` aparecem com valor negativo. `balance_after` é o saldo após aquele lançamento. Transferências pendentes ou rejeitadas não aparecem no extrato porque não geraram lançamentos.
 
+### Conciliação interna
+
+```http
+GET /internal/accounts/CHAVE_DA_CONTA/reconciliation
+INTERNAL-TOKEN: SEU_TOKEN_LOCAL
+```
+
+Exemplo de resposta para uma conta sem divergências:
+
+```json
+{
+  "account_key": "UUID_DA_CONTA",
+  "balance": "120.00",
+  "ledger_balance": "120.00",
+  "paid_charges_checked": 1,
+  "consistent": true,
+  "issues": []
+}
+```
+
+`ledger_balance` é a soma dos valores dos lançamentos da conta. A verificação das cobranças pagas confere o depósito concluído e o crédito ligados a cada cobrança. Possíveis tipos de divergência são `BALANCE_MISMATCH`, `CHARGE_TRANSACTION_MISMATCH` e `CHARGE_CREDIT_MISMATCH`.
+
+Essa rota é destinada a diagnóstico interno. Ela não modifica os registros, não repara divergências automaticamente e não consulta instituições de pagamento externas.
+
 ## Testes
 
 Com a API e o banco saudáveis, ative o ambiente Python 3.11. No Git Bash do Windows:
@@ -314,6 +346,8 @@ PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/e2e
 ```
 
 Os testes das cobranças verificam criação sem movimentação financeira, autenticação, isolamento entre clientes, validação, paginação, vencimento, totais de recebíveis, pagamento correto, rejeição de pagamentos incompatíveis e proteção contra créditos duplicados, inclusive com requisições simultâneas.
+
+Os testes de conciliação verificam a exigência do token interno, uma conta consistente, a detecção de divergências inseridas diretamente no banco e a consistência das contas após pagamento de cobrança e transferência processada pelo worker.
 
 Na CI, os testes de integração e unidade rodam antes de iniciar o worker; os testes de ponta a ponta rodam depois, com os três serviços ligados.
 
@@ -336,6 +370,6 @@ Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rot
 
 ## Estado do projeto
 
-O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento e os totais a receber, simular o recebimento na conta profissional e consultar o crédito no extrato.
+O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento e os totais a receber, simular o recebimento na conta profissional, consultar o crédito no extrato e verificar a consistência dos registros internos.
 
 Pagamentos externos reais, emissão de boletos, Pix e documentos fiscais estão fora do escopo desta versão.

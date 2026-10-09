@@ -141,3 +141,23 @@ def test_service_payment_and_transfer_to_personal_account():
         ("DEBIT", "-30.00"),
         ("CREDIT", "100.00"),
     ]
+
+    for key, expected_balance, expected_paid_charges in (
+        (professional_key, "70.00", 1),
+        (personal_key, "30.00", 0),
+    ):
+        reconciliation = send(
+            "GET",
+            f"/internal/accounts/{key}/reconciliation",
+            headers={
+                "INTERNAL-TOKEN": environ.get(
+                    "INTERNAL_TOKEN", "default_token"
+                )
+            },
+        )
+        assert reconciliation.response_status == 200
+        assert reconciliation.response_json["balance"] == expected_balance
+        assert reconciliation.response_json["ledger_balance"] == expected_balance
+        assert reconciliation.response_json["paid_charges_checked"] == expected_paid_charges
+        assert reconciliation.response_json["consistent"] is True
+        assert reconciliation.response_json["issues"] == []
