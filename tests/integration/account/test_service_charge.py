@@ -229,7 +229,7 @@ def test_lists_charges_with_pagination():
         headers=bearer(token),
     )
     assert invalid_page.response_status == 400
-    
+
 def internal_headers():
     return {"INTERNAL-TOKEN": environ.get("INTERNAL_TOKEN", "default_token")}
 
@@ -404,7 +404,7 @@ def test_concurrent_retries_credit_charge_only_once():
     )
     assert account.response_json["balance"] == "120.00"
     assert len(entries.response_json["entries"]) == 1
-    
+
 def test_invalid_references_do_not_credit_or_block_later_payment():
     accounts, token = create_client()
     account_key = accounts["professional"]

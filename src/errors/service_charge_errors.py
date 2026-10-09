@@ -38,7 +38,7 @@ class InvalidChargeAmount(QIException):
             "The charge amount must be greater than zero.",
             "O valor da cobrança deve ser maior que zero.",
         )
-        
+
 class ServiceChargePaymentConflict(QIException):
     code = "KOD006004"
 
