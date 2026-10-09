@@ -14,6 +14,7 @@ class Transaction(Base):
     amount = Column(Numeric(18, 2), nullable=False)
     fee = Column(Numeric(18, 2), nullable=False, server_default="0")
     source_account_id = Column(Integer, ForeignKey("accounts.id"))
+    service_charge_id = Column(Integer, ForeignKey("service_charges.id"))
     destination_account_id = Column(
         Integer,
         ForeignKey("accounts.id"),

@@ -3,6 +3,7 @@ from uuid import UUID
 from database import Context
 from models.client import Account
 from models.transaction import Transaction
+from models.service_charge import ServiceCharge
 
 
 class TransferRepository:
@@ -54,5 +55,14 @@ class TransferRepository:
                 Transaction.transaction_key == transaction_key,
                 Transaction.source_account_id == source_account_id,
             )
+            .first()
+        )
+
+    def get_charge_by_key(
+        self, charge_key: UUID
+    ) -> ServiceCharge | None:
+        return (
+            self.session.query(ServiceCharge)
+            .filter(ServiceCharge.charge_key == charge_key)
             .first()
         )

@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from models.client import Account
 from models.transaction import AccountEntry, Transaction
+from models.service_charge import ServiceCharge
+
 from utils.money import MAX_BALANCE
 
 
@@ -53,6 +55,35 @@ class TransferProcessor:
 
             source = accounts[transaction.source_account_id]
             destination = accounts[transaction.destination_account_id]
+
+            charge = None
+            if transaction.service_charge_id is not None:
+                charge = (
+                    self.session.query(ServiceCharge)
+                    .filter(
+                        ServiceCharge.id == transaction.service_charge_id
+                    )
+                    .with_for_update()
+                    .one()
+                )
+
+                if (
+                    charge.account_id != destination.id
+                    or charge.amount != transaction.amount
+                ):
+                    raise RuntimeError(
+                        "Charge payment does not match its transfer"
+                    )
+
+                if charge.status == "PAID":
+                    transaction.status = "REJECTED"
+                    transaction.rejection_reason = "CHARGE_ALREADY_PAID"
+                    self.session.commit()
+                    return "REJECTED"
+
+                if charge.status != "OPEN":
+                    raise RuntimeError("Unexpected service charge status")
+
             total_debit = transaction.amount + transaction.fee
 
             if source.balance < total_debit:
@@ -110,6 +141,11 @@ class TransferProcessor:
 
             transaction.status = "COMPLETED"
             transaction.completed_at = func.now()
+
+            if charge is not None:
+                charge.status = "PAID"
+                charge.paid_transaction_id = transaction.id
+                charge.paid_at = func.now()
 
             # Saldo, lançamentos e status tornam-se definitivos juntos.
             self.session.commit()

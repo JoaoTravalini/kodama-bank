@@ -33,14 +33,26 @@ class ReconciliationController(BaseController):
         for charge, transaction, entry in paid_records:
             expected_reference = f"charge:{charge.charge_key}"
 
-            if (
-                transaction is None
-                or transaction.kind != "DEPOSIT"
-                or transaction.status != "COMPLETED"
-                or transaction.destination_account_id != account.id
-                or transaction.amount != charge.amount
-                or transaction.external_reference != expected_reference
-            ):
+            valid_payment = (
+                transaction is not None
+                and transaction.status == "COMPLETED"
+                and transaction.destination_account_id == account.id
+                and transaction.amount == charge.amount
+                and (
+                    (
+                        transaction.kind == "DEPOSIT"
+                        and transaction.external_reference == expected_reference
+                        and transaction.service_charge_id is None
+                    )
+                    or (
+                        transaction.kind == "TRANSFER"
+                        and transaction.service_charge_id == charge.id
+                        and transaction.source_account_id is not None
+                    )
+                )
+            )
+
+            if not valid_payment:
                 issues.append({
                     "code": "CHARGE_TRANSACTION_MISMATCH",
                     "charge_key": str(charge.charge_key),

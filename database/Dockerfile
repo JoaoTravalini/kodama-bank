@@ -8,3 +8,4 @@ COPY migrations/002_transactions.sql /docker-entrypoint-initdb.d/02.sql
 COPY migrations/003_transfer_rejection_reason.sql /docker-entrypoint-initdb.d/03.sql
 COPY migrations/004_service_charges.sql /docker-entrypoint-initdb.d/04.sql
 COPY migrations/005_charge_due_date.sql /docker-entrypoint-initdb.d/05.sql
+COPY migrations/006_charge_payments.sql /docker-entrypoint-initdb.d/06.sql

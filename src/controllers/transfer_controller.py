@@ -53,6 +53,7 @@ class TransferController(BaseController):
             saved_destination is None
             or saved_destination.account_key != destination_account_key
             or existing.amount != amount
+            or existing.service_charge_id is not None
         ):
             raise TransferIdempotencyConflict()
 
