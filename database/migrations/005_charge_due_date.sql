@@ -1,0 +1,2 @@
+ALTER TABLE service_charges
+ADD COLUMN IF NOT EXISTS due_date DATE;

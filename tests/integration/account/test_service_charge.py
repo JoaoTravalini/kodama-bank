@@ -3,6 +3,7 @@ from uuid import uuid4
 from tests.utils.random_generator import RandomGenerator
 from tests.utils.requisition import ClientRequisition
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from os import environ
 
 
@@ -439,3 +440,223 @@ def test_invalid_references_do_not_credit_or_block_later_payment():
         headers=bearer(token),
     )
     assert detail.response_json["status"] == "PAID"
+
+def test_receivables_summary_tracks_due_dates_and_payment():
+    accounts, token = create_client()
+    account_key = accounts["professional"]
+    charges_endpoint = f"/accounts/{account_key}/charges"
+    summary_endpoint = f"{charges_endpoint}/summary"
+
+    empty = send("GET", summary_endpoint, headers=bearer(token))
+    assert empty.response_status == 200
+
+    today = date.fromisoformat(empty.response_json["as_of_date"])
+    assert empty.response_json["open"] == {
+        "count": 0,
+        "amount": "0.00",
+    }
+    assert empty.response_json["overdue"] == {
+        "count": 0,
+        "amount": "0.00",
+    }
+    assert empty.response_json["paid"] == {
+        "count": 0,
+        "amount": "0.00",
+    }
+
+    def create(description, amount, due_date=None):
+        payload = {"description": description, "amount": amount}
+        if due_date is not None:
+            payload["due_date"] = due_date.isoformat()
+
+        result = send(
+            "POST",
+            charges_endpoint,
+            payload=payload,
+            headers=bearer(token),
+        )
+        assert result.response_status == 201
+        return result.response_json
+
+    late = create("Serviço atrasado", "50.00", today - timedelta(days=10))
+    due_today = create("Vence hoje", "20.00", today)
+    future = create("Vence depois", "30.00", today + timedelta(days=10))
+    without_date = create("Sem vencimento", "40.00")
+    late_to_pay = create(
+        "Serviço atrasado a quitar",
+        "70.00",
+        today - timedelta(days=10),
+    )
+
+    assert late["due_date"] == (today - timedelta(days=10)).isoformat()
+    assert late["overdue"] is True
+    assert due_today["overdue"] is False
+    assert future["overdue"] is False
+    assert without_date["due_date"] is None
+    assert without_date["overdue"] is False
+    assert late_to_pay["overdue"] is True
+
+    before_payment = send(
+        "GET",
+        summary_endpoint,
+        headers=bearer(token),
+    )
+    assert before_payment.response_status == 200
+    assert before_payment.response_json["open"] == {
+        "count": 5,
+        "amount": "210.00",
+    }
+    assert before_payment.response_json["overdue"] == {
+        "count": 2,
+        "amount": "120.00",
+    }
+    assert before_payment.response_json["paid"] == {
+        "count": 0,
+        "amount": "0.00",
+    }
+
+    payment = pay_charge(account_key, late_to_pay)
+    assert payment.response_status == 201
+
+    paid_detail = send(
+        "GET",
+        f"{charges_endpoint}/{late_to_pay['charge_key']}",
+        headers=bearer(token),
+    )
+    assert paid_detail.response_status == 200
+    assert paid_detail.response_json["status"] == "PAID"
+    assert paid_detail.response_json["overdue"] is False
+    assert paid_detail.response_json["due_date"] == late_to_pay["due_date"]
+
+    after_payment = send(
+        "GET",
+        summary_endpoint,
+        headers=bearer(token),
+    )
+    assert after_payment.response_status == 200
+    assert after_payment.response_json["open"] == {
+        "count": 4,
+        "amount": "140.00",
+    }
+    assert after_payment.response_json["overdue"] == {
+        "count": 1,
+        "amount": "50.00",
+    }
+    assert after_payment.response_json["paid"] == {
+        "count": 1,
+        "amount": "70.00",
+    }
+
+    account = send(
+        "GET",
+        f"/accounts/{account_key}",
+        headers=bearer(token),
+    )
+    assert account.response_status == 200
+    assert account.response_json["balance"] == "70.00"
+
+
+def test_receivables_summary_requires_owner_and_professional_account():
+    owner_accounts, owner_token = create_client()
+    _, other_token = create_client()
+
+    professional_summary = (
+        f"/accounts/{owner_accounts['professional']}/charges/summary"
+    )
+    personal_summary = (
+        f"/accounts/{owner_accounts['personal']}/charges/summary"
+    )
+
+    assert send("GET", professional_summary).response_status == 401
+    assert send(
+        "GET",
+        professional_summary,
+        headers=bearer(other_token),
+    ).response_status == 404
+
+    personal = send(
+        "GET",
+        personal_summary,
+        headers=bearer(owner_token),
+    )
+    assert personal.response_status == 422
+    assert personal.response_json["code"] == "KOD006002"
+
+    own = send(
+        "GET",
+        professional_summary,
+        headers=bearer(owner_token),
+    )
+    assert own.response_status == 200
+    assert own.response_json["account_key"] == (
+        owner_accounts["professional"]
+    )
+
+
+def test_rejects_invalid_due_date_without_creating_charge():
+    accounts, token = create_client()
+    endpoint = f"/accounts/{accounts['professional']}/charges"
+
+    for invalid_date in ("2026-02-30", "2026/02/10", None):
+        response = send(
+            "POST",
+            endpoint,
+            payload={
+                "description": "Serviço inválido",
+                "amount": "10.00",
+                "due_date": invalid_date,
+            },
+            headers=bearer(token),
+        )
+        assert response.response_status == 400
+        assert response.response_json["code"] == "QIT000001"
+
+    summary = send(
+        "GET",
+        f"{endpoint}/summary",
+        headers=bearer(token),
+    )
+    assert summary.response_status == 200
+    assert summary.response_json["open"]["count"] == 0
+
+def test_summary_includes_charges_beyond_first_list_page():
+    accounts, token = create_client()
+    account_key = accounts["professional"]
+    endpoint = f"/accounts/{account_key}/charges"
+    headers = bearer(token)
+
+    initial = send("GET", f"{endpoint}/summary", headers=headers)
+    assert initial.response_status == 200
+    yesterday = (
+        date.fromisoformat(initial.response_json["as_of_date"])
+        - timedelta(days=1)
+    ).isoformat()
+
+    for number in range(21):
+        created = send(
+            "POST",
+            endpoint,
+            payload={
+                "description": f"Serviço {number}",
+                "amount": "1.00",
+                "due_date": yesterday,
+            },
+            headers=headers,
+        )
+        assert created.response_status == 201
+
+    first_page = send("GET", endpoint, headers=headers)
+    assert first_page.response_status == 200
+    assert len(first_page.response_json["charges"]) == 20
+    assert first_page.response_json["has_more"] is True
+
+    summary = send("GET", f"{endpoint}/summary", headers=headers)
+    assert summary.response_status == 200
+    assert summary.response_json["open"] == {
+        "count": 21,
+        "amount": "21.00",
+    }
+    assert summary.response_json["overdue"] == {
+        "count": 21,
+        "amount": "21.00",
+    }

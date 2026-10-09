@@ -36,6 +36,17 @@ class ServiceChargeResource:
         )
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
 
+    def on_get_summary(
+        self,
+        request: Request,
+        account_key: UUID,
+    ) -> JSONResponse:
+        result = ServiceChargeController().summary(
+            request.headers.get("Authorization"),
+            account_key,
+        )
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+
     def on_get(
         self,
         request: Request,

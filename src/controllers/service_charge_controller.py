@@ -1,9 +1,11 @@
+from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 from controllers.auth_controller import AuthController
 from controllers.base_controller import BaseController
 from errors.account_errors import AccountNotFound
+from errors.base_error import InvalidSchema
 from errors.service_charge_errors import (
     InvalidChargeAmount,
     ProfessionalAccountRequired,
@@ -19,12 +21,24 @@ class ServiceChargeController(BaseController):
         self.repository = ServiceChargeRepository(self.context)
 
     @staticmethod
-    def _response(charge: ServiceCharge) -> dict:
+    def _response(charge: ServiceCharge, today: date) -> dict:
+        overdue = (
+            charge.status == "OPEN"
+            and charge.due_date is not None
+            and charge.due_date < today
+        )
+
         return {
             "charge_key": str(charge.charge_key),
             "description": charge.description,
             "amount": format(charge.amount, ".2f"),
             "status": charge.status,
+            "due_date": (
+                charge.due_date.isoformat()
+                if charge.due_date is not None
+                else None
+            ),
+            "overdue": overdue,
             "payment_reference": f"charge:{charge.charge_key}",
             "created_at": charge.created_at.isoformat(),
             "paid_at": (
@@ -58,17 +72,29 @@ class ServiceChargeController(BaseController):
         if amount <= 0:
             raise InvalidChargeAmount()
 
+        due_date = None
+        if "due_date" in payload:
+            try:
+                due_date = date.fromisoformat(payload["due_date"])
+            except ValueError:
+                raise InvalidSchema(
+                    "due_date must be a valid date in YYYY-MM-DD format"
+                ) from None
+
+        today = self.repository.business_date()
+
         charge = ServiceCharge(
             charge_key=uuid4(),
             account_id=account.id,
             description=payload["description"].strip(),
             amount=amount,
+            due_date=due_date,
             status="OPEN",
         )
 
         self.session.add(charge)
         self.session.flush()
-        response = self._response(charge)
+        response = self._response(charge, today)
         self.session.commit()
         return response
 
@@ -80,6 +106,7 @@ class ServiceChargeController(BaseController):
         limit: int,
     ) -> dict:
         account = self._owned_account(authorization, account_key)
+        today = self.repository.business_date()
         rows = self.repository.list_for_account(account.id, page, limit)
 
         return {
@@ -87,7 +114,10 @@ class ServiceChargeController(BaseController):
             "page": page,
             "limit": limit,
             "has_more": len(rows) > limit,
-            "charges": [self._response(charge) for charge in rows[:limit]],
+            "charges": [
+                self._response(charge, today)
+                for charge in rows[:limit]
+            ],
         }
 
     def get(
@@ -102,4 +132,35 @@ class ServiceChargeController(BaseController):
         if charge is None:
             raise ServiceChargeNotFound()
 
-        return self._response(charge)
+        today = self.repository.business_date()
+        return self._response(charge, today)
+
+    def summary(
+        self,
+        authorization: str | None,
+        account_key: UUID,
+    ) -> dict:
+        account = self._owned_account(authorization, account_key)
+
+        if account.type != "professional":
+            raise ProfessionalAccountRequired()
+
+        today = self.repository.business_date()
+        totals = self.repository.summary_for_account(account.id, today)
+
+        return {
+            "account_key": str(account.account_key),
+            "as_of_date": today.isoformat(),
+            "open": {
+                "count": totals.open_count,
+                "amount": format(totals.open_amount, ".2f"),
+            },
+            "overdue": {
+                "count": totals.overdue_count,
+                "amount": format(totals.overdue_amount, ".2f"),
+            },
+            "paid": {
+                "count": totals.paid_count,
+                "amount": format(totals.paid_amount, ".2f"),
+            },
+        }

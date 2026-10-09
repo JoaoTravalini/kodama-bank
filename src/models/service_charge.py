@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 
 from models.base import Base
@@ -12,6 +12,7 @@ class ServiceCharge(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     description = Column(String(255), nullable=False)
     amount = Column(Numeric(18, 2), nullable=False)
+    due_date = Column(Date)
     status = Column(String(20), nullable=False, server_default="OPEN")
     paid_transaction_id = Column(
         Integer,

@@ -22,8 +22,8 @@ class ProfessionalAccountRequired(QIException):
             "Professional account required",
             self.code,
             422,
-            "Charges can only be created for professional accounts.",
-            "Cobranças só podem ser criadas na conta profissional.",
+            "Charge operations require a professional account.",
+            "Operações de cobrança exigem uma conta profissional.",
         )
 
 

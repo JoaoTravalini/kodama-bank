@@ -196,6 +196,11 @@ def create_app() -> FastAPI:
         methods=["GET"],
     )
     application.add_api_route(
+        "/accounts/{account_key}/charges/summary",
+        service_charge_resource.on_get_summary,
+        methods=["GET"],
+    )
+    application.add_api_route(
         "/accounts/{account_key}/charges/{charge_key}",
         service_charge_resource.on_get,
         methods=["GET"],

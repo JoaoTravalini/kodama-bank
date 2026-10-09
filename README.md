@@ -18,6 +18,7 @@ API bancária para profissionais autônomos. O projeto implementa cadastro, aute
 - Extrato paginado por conta, protegido por JWT.
 - Registro e consulta de cobranças por serviços na conta profissional.
 - Quitação simulada de cobranças, vinculando cobrança, depósito, saldo e extrato.
+- Agenda de recebíveis com vencimento opcional, identificação de atrasos e resumo de valores abertos, atrasados e pagos.
 
 ## Fluxos principais
 
@@ -33,13 +34,15 @@ O processamento usa uma transação de banco e bloqueia as linhas envolvidas. Um
 
 ### Cobrança por serviço
 
-1. O autônomo registra na conta profissional um serviço prestado e o valor a receber. A cobrança começa como `OPEN` e não altera o saldo.
+1. O autônomo registra na conta profissional um serviço prestado, o valor a receber e, opcionalmente, a data de vencimento. A cobrança começa como `OPEN` e não altera o saldo.
 2. A API devolve uma referência de pagamento no formato `charge:UUID`.
 3. Para demonstrar o recebimento, uma operação interna envia um depósito simulado à conta profissional com essa referência e o valor exato.
 4. O depósito registra o crédito no extrato, atualiza o saldo e altera a cobrança para `PAID` na mesma transação de banco.
 5. Repetir o mesmo depósito recupera a operação existente, sem creditar a conta novamente.
 
 Uma referência de cobrança desconhecida, uma conta diferente ou um valor divergente são recusados sem movimentar o saldo. O cliente pode consultar suas cobranças com JWT, mas quitar uma cobrança exige `INTERNAL-TOKEN`.
+
+Uma cobrança `OPEN` com vencimento anterior à data atual em São Paulo aparece com `overdue: true`; ela continua `OPEN` no banco. Vencimento no dia atual ainda não é atraso. Depois do pagamento, `overdue` passa a `false`. O resumo de recebíveis soma todas as cobranças da conta profissional, independentemente da paginação da listagem; `overdue` é um subconjunto de `open`.
 
 ## Requisitos
 
@@ -61,7 +64,7 @@ Para gerar uma chave JWT:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Não versionе o arquivo `.env`.
+Não versione o arquivo `.env`.
 
 Suba os serviços:
 
@@ -80,11 +83,19 @@ curl -i http://127.0.0.1:3000/health_check
 
 A resposta esperada é `204 No Content`.
 
-Os scripts SQL em `database/` são aplicados automaticamente **somente quando um banco novo é inicializado**. Reconstruir a imagem não reaplica migrações a um volume existente. Para um banco local que já possuía as migrações anteriores, aplique a migração de cobranças uma única vez:
+Os scripts SQL em `database/` são aplicados automaticamente **somente quando um banco novo é inicializado**. Reconstruir a imagem não reaplica migrações a um volume existente. Para um banco local existente, execute apenas as migrações que ainda faltam, na ordem. Se o banco ainda não possui a tabela de cobranças, aplique primeiro:
 
 ```bash
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/004_service_charges.sql
 ```
+
+Em seguida, se ainda não possui a coluna `due_date`, aplique:
+
+```bash
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/005_charge_due_date.sql
+```
+
+A migração `005` também pode ser executada novamente sem duplicar a coluna.
 
 ## Rotas
 
@@ -102,6 +113,7 @@ docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < data
 | `GET` | `/accounts/{account_key}/entries` | JWT | Consulta o extrato da conta |
 | `POST` | `/accounts/{account_key}/charges` | JWT | Registra uma cobrança na conta profissional |
 | `GET` | `/accounts/{account_key}/charges` | JWT | Lista as cobranças da conta |
+| `GET` | `/accounts/{account_key}/charges/summary` | JWT | Resume os recebíveis da conta profissional |
 | `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta uma cobrança |
 
 Nas rotas do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente.
@@ -168,11 +180,12 @@ Content-Type: application/json
 
 {
   "description": "Criação de site",
-  "amount": "120.00"
+  "amount": "120.00",
+  "due_date": "2026-10-15"
 }
 ```
 
-A resposta inclui uma `charge_key`, o estado `OPEN` e uma `payment_reference` no formato `charge:UUID`. Criar a cobrança não deposita dinheiro.
+`due_date` é opcional, usa `AAAA-MM-DD` e precisa ser uma data válida. Pode ser anterior à data atual para registrar um serviço já vencido. Sem vencimento, a resposta traz `due_date: null`. A resposta também inclui `charge_key`, estado `OPEN`, `overdue` e `payment_reference` no formato `charge:UUID`. Criar a cobrança não deposita dinheiro.
 
 Para listar cobranças:
 
@@ -182,6 +195,27 @@ Authorization: Bearer SEU_JWT
 ```
 
 `page` aceita valores de 1 a 999999 e `limit` aceita valores de 1 a 100. Os padrões são `page=1` e `limit=20`.
+
+Para consultar os totais da conta profissional:
+
+```http
+GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/summary
+Authorization: Bearer SEU_JWT
+```
+
+Exemplo de resposta:
+
+```json
+{
+  "account_key": "UUID_DA_CONTA_PROFISSIONAL",
+  "as_of_date": "2026-10-09",
+  "open": {"count": 3, "amount": "190.00"},
+  "overdue": {"count": 1, "amount": "50.00"},
+  "paid": {"count": 2, "amount": "150.00"}
+}
+```
+
+`as_of_date` é a data em São Paulo usada para avaliar os vencimentos. `open` inclui as cobranças atrasadas; não some `open` e `overdue`. `paid` é o histórico de cobranças pagas, e não o saldo atual da conta. Esses totais cobrem todas as cobranças da conta, mesmo quando a listagem é paginada.
 
 Para consultar uma cobrança:
 
@@ -203,7 +237,7 @@ Content-Type: application/json
 }
 ```
 
-Após esse depósito, a consulta da cobrança retorna `PAID` e `paid_at`; o crédito pode ser visto no extrato. O JWT do cliente não autoriza depósitos. Cada chamada de criação de cobrança registra **uma nova cobrança**; a proteção contra repetição se aplica ao depósito com a mesma referência.
+Após esse depósito, a consulta da cobrança retorna `PAID`, `paid_at` e `overdue: false`; o crédito pode ser visto no extrato. O JWT do cliente não autoriza depósitos. Cada chamada de criação de cobrança registra **uma nova cobrança**; a proteção contra repetição se aplica ao depósito com a mesma referência.
 
 ### Solicitação de transferência
 
@@ -279,7 +313,7 @@ docker compose start worker
 PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/e2e
 ```
 
-Os testes das cobranças verificam criação sem movimentação financeira, autenticação, isolamento entre clientes, validação, paginação, pagamento correto, rejeição de pagamentos incompatíveis e proteção contra créditos duplicados, inclusive com requisições simultâneas.
+Os testes das cobranças verificam criação sem movimentação financeira, autenticação, isolamento entre clientes, validação, paginação, vencimento, totais de recebíveis, pagamento correto, rejeição de pagamentos incompatíveis e proteção contra créditos duplicados, inclusive com requisições simultâneas.
 
 Na CI, os testes de integração e unidade rodam antes de iniciar o worker; os testes de ponta a ponta rodam depois, com os três serviços ligados.
 
@@ -302,6 +336,6 @@ Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rot
 
 ## Estado do projeto
 
-O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar sua cobrança, simular o recebimento na conta profissional e consultar o crédito no extrato.
+O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento e os totais a receber, simular o recebimento na conta profissional e consultar o crédito no extrato.
 
 Pagamentos externos reais, emissão de boletos, Pix e documentos fiscais estão fora do escopo desta versão.
