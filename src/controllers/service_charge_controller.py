@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
+from sqlalchemy import func
 
 from controllers.auth_controller import AuthController
 from controllers.base_controller import BaseController
@@ -11,6 +12,7 @@ from errors.service_charge_errors import (
     InvalidChargeAmount,
     ProfessionalAccountRequired,
     ServiceChargeNotFound,
+    ChargeCancellationConflict,
 )
 from models.service_charge import ServiceCharge
 from repositories.service_charge_repository import ServiceChargeRepository
@@ -45,6 +47,11 @@ class ServiceChargeController(BaseController):
             "paid_at": (
                 charge.paid_at.isoformat()
                 if charge.paid_at is not None
+                else None
+            ),
+            "canceled_at": (
+                charge.canceled_at.isoformat()
+                if charge.canceled_at is not None
                 else None
             ),
         }
@@ -193,6 +200,34 @@ class ServiceChargeController(BaseController):
                 else "SIMULATED_INTERNAL_DEPOSIT"
             ),
         }
+
+    def cancel(
+        self,
+        authorization: str | None,
+        account_key: UUID,
+        charge_key: UUID,
+    ) -> dict:
+        account = self._owned_account(authorization, account_key)
+        charge = self.repository.get_by_key_for_update(
+            account.id, charge_key
+        )
+
+        if charge is None:
+            raise ServiceChargeNotFound()
+
+        if charge.status == "PAID":
+            raise ChargeCancellationConflict()
+
+        if charge.status == "OPEN":
+            charge.status = "CANCELED"
+            charge.canceled_at = func.now()
+            self.session.flush()
+            self.session.refresh(charge)
+
+        today = self.repository.business_date()
+        response = self._response(charge, today)
+        self.session.commit()
+        return response
 
     def summary(
         self,

@@ -25,3 +25,15 @@ class ChargeAlreadyPaid(QIException):
             "The service charge has already been paid.",
             "A cobrança já foi paga.",
         )
+
+class ChargeCanceled(QIException):
+    code = "KOD007003"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Charge canceled",
+            self.code,
+            409,
+            "The service charge was canceled and cannot be paid.",
+            "A cobrança foi cancelada e não pode ser paga.",
+        )

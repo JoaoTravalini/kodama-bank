@@ -62,3 +62,15 @@ class ChargeReceiptUnavailable(QIException):
             "The charge has not been paid yet.",
             "A cobrança ainda não foi paga.",
         )
+
+class ChargeCancellationConflict(QIException):
+    code = "KOD006006"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Charge cancellation conflict",
+            self.code,
+            409,
+            "A paid service charge cannot be canceled.",
+            "Uma cobrança paga não pode ser cancelada.",
+        )

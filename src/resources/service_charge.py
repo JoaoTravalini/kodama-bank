@@ -76,3 +76,19 @@ class ServiceChargeResource:
             status_code=status.HTTP_200_OK,
             headers={"Cache-Control": "no-store"},
         )
+
+    def on_post_cancel(
+        self,
+        request: Request,
+        account_key: UUID,
+        charge_key: UUID,
+    ) -> JSONResponse:
+        result = ServiceChargeController().cancel(
+            request.headers.get("Authorization"),
+            account_key,
+            charge_key,
+        )
+        return JSONResponse(
+            content=result,
+            status_code=status.HTTP_200_OK,
+        )

@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from controllers.auth_controller import AuthController
 from controllers.base_controller import BaseController
 from errors.account_errors import AccountNotFound
-from errors.charge_payment_errors import ChargeAlreadyPaid, OwnChargePayment
+from errors.charge_payment_errors import ChargeAlreadyPaid, OwnChargePayment, ChargeCanceled
 from errors.service_charge_errors import ServiceChargeNotFound
 from errors.transfer_errors import TransferIdempotencyConflict
 from models.transaction import Transaction
@@ -80,6 +80,9 @@ class ChargePaymentController(BaseController):
 
         if source.client_id == destination.client_id:
             raise OwnChargePayment()
+
+        if charge.status == "CANCELED":
+            raise ChargeCanceled()
 
         if charge.status != "OPEN":
             raise ChargeAlreadyPaid()

@@ -81,6 +81,12 @@ class TransferProcessor:
                     self.session.commit()
                     return "REJECTED"
 
+                if charge.status == "CANCELED":
+                    transaction.status = "REJECTED"
+                    transaction.rejection_reason = "CHARGE_CANCELED"
+                    self.session.commit()
+                    return "REJECTED"
+
                 if charge.status != "OPEN":
                     raise RuntimeError("Unexpected service charge status")
 

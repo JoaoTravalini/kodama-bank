@@ -20,6 +20,7 @@ API bancária para profissionais autônomos. O projeto implementa cadastro, aute
 - Agenda de recebíveis com vencimento opcional, identificação de atrasos e resumo de valores abertos, atrasados e pagos.
 - Pagamento de cobrança por outro cliente com o saldo de uma conta Kodama.
 - Quitação simulada de cobrança por depósito interno.
+- Cancelamento de cobrança aberta, preservando o histórico e impedindo pagamentos posteriores.
 - Conciliação interna protegida por `INTERNAL-TOKEN`, que identifica divergências entre saldo, lançamentos e cobranças pagas.
 
 ## Fluxos principais
@@ -42,6 +43,8 @@ O processamento usa uma transação de banco e bloqueia as linhas envolvidas. Um
 4. Um pagamento concluído registra o crédito no extrato, atualiza o saldo e altera a cobrança para `PAID` na mesma transação de banco.
 
 Uma cobrança `OPEN` com vencimento anterior à data atual em São Paulo aparece com `overdue: true`; ela continua `OPEN` no banco. Vencimento no dia atual ainda não é atraso. Depois do pagamento, `overdue` passa a `false`. O resumo de recebíveis soma todas as cobranças da conta profissional, independentemente da paginação da listagem; `overdue` é um subconjunto de `open`.
+
+O titular também pode cancelar uma cobrança `OPEN`. Ela continua no histórico como `CANCELED`, sai dos valores em aberto e não pode mais ser paga. Uma cobrança `PAID` não pode ser cancelada; pagamentos pendentes são rejeitados pelo worker sem débito quando encontram a cobrança cancelada.
 
 ### Pagamento por outro cliente
 
@@ -132,6 +135,12 @@ docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < data
 
 As migrações `005` e `006` podem ser executadas novamente sem duplicar suas colunas. A conciliação interna não exige uma migração própria.
 
+Para uma base existente sem o estado de cancelamento, aplique também:
+
+```bash
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/007_charge_cancellation.sql
+```
+
 ## Rotas
 
 | Método | Rota | Autorização | Descrição |
@@ -150,9 +159,10 @@ As migrações `005` e `006` podem ser executadas novamente sem duplicar suas co
 | `GET` | `/accounts/{account_key}/charges` | JWT | Lista as cobranças da conta |
 | `GET` | `/accounts/{account_key}/charges/summary` | JWT | Resume os recebíveis da conta profissional |
 | `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta uma cobrança do titular |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}/receipt` | JWT | Consulta o comprovante de uma cobrança paga |
+| `POST` | `/accounts/{account_key}/charges/{charge_key}/cancel` | JWT | Cancela uma cobrança aberta |
 | `POST` | `/accounts/{source_account_key}/charge-payments` | JWT | Solicita o pagamento de uma cobrança usando a conta de origem |
 | `GET` | `/internal/accounts/{account_key}/reconciliation` | `INTERNAL-TOKEN` | Verifica a consistência interna da conta e das cobranças pagas |
-| `GET` | `/accounts/{account_key}/charges/{charge_key}/receipt` | JWT | Consulta o comprovante de uma cobrança paga |
 
 Nas rotas de consulta do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente. A rota de conciliação é interna: o JWT do cliente não a autoriza.
 
@@ -261,12 +271,24 @@ Para consultar uma cobrança:
 GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY
 Authorization: Bearer SEU_JWT
 ```
-Após a quitação, o titular da conta profissional pode consultar
-`GET /accounts/{account_key}/charges/{charge_key}/receipt` com seu JWT.
-O JSON reúne a cobrança, a transação concluída e o crédito no extrato.
-Uma cobrança aberta retorna `409`; outro cliente recebe `404`.
-`SIMULATED_INTERNAL_DEPOSIT` indica uma operação simulada, não um
-pagamento bancário real.
+
+Depois da quitação, o titular da conta profissional pode consultar o comprovante:
+
+```http
+GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY/receipt
+Authorization: Bearer SEU_JWT
+```
+
+O JSON identifica a cobrança, a transação concluída e o crédito correspondente no extrato (`credit_entry_key`), além do valor recebido, saldo após aquele crédito e data da quitação. `payment_method` vale `KODAMA_TRANSFER` ou `SIMULATED_INTERNAL_DEPOSIT`. O comprovante não expõe os dados da conta do pagador; a tarifa, quando houver, é paga pelo pagador, não descontada do valor recebido pelo profissional. Cobranças em aberto retornam `409`; uma conta de outro cliente retorna `404`. Este comprovante descreve operações **simuladas no Kodama** e não comprova uma transferência bancária real.
+
+Para cancelar uma cobrança ainda aberta:
+
+```http
+POST /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY/cancel
+Authorization: Bearer SEU_JWT
+```
+
+A resposta `200` mostra `status: CANCELED` e `canceled_at`; repetir o cancelamento retorna a mesma cobrança. Uma cobrança paga responde `409`. O cancelamento não estorna pagamentos nem apaga o histórico. Todas as respostas de cobrança agora trazem `canceled_at: null` quando não há cancelamento.
 
 ### Pagamento da cobrança por outro cliente
 
@@ -293,6 +315,8 @@ Authorization: Bearer JWT_DO_PAGADOR
 ```
 
 O worker pode concluir ou rejeitar a operação. Uma transferência rejeitada informa `rejection_reason`, não debita o pagador e deixa a cobrança `OPEN`, exceto quando outra operação já a pagou. Para tentar novamente após uma rejeição por falta de saldo, use **uma nova** `idempotency_key`.
+
+Se o profissional cancelar uma cobrança com pagamento `PENDING`, o worker devolve `REJECTED` com `rejection_reason: CHARGE_CANCELED` sem debitar o pagador.
 
 O pagamento usa a tarifa de transferência entre clientes: 0,5% do valor, limitada a R$ 2,00. O pagador precisa ter saldo para **valor mais tarifa**. O recebedor recebe o valor integral da cobrança. Repetir a mesma solicitação com a mesma chave recupera a operação anterior; usar essa chave com outros dados gera conflito.
 
@@ -413,9 +437,9 @@ docker compose start worker
 PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/e2e
 ```
 
-Os testes cobrem criação de clientes, autenticação, contas, depósitos, transferências e extrato. Para cobranças, verificam criação sem movimentação financeira, isolamento entre clientes, vencimento, resumo de recebíveis, quitação por depósito e pagamento por outro cliente.
+Os testes cobrem criação de clientes, autenticação, contas, depósitos, transferências e extrato. Para cobranças, verificam criação sem movimentação financeira, isolamento entre clientes, vencimento, resumo de recebíveis, quitação por depósito, pagamento por outro cliente e cancelamento de cobranças abertas.
 
-Os testes de pagamento verificam tarifa, saldos, lançamentos, idempotência, falta de saldo, concorrência entre pagadores, depósito que quita uma cobrança ainda com transferência pendente e rollback após falha técnica. A jornada de ponta a ponta verifica o processamento pelo worker e a conciliação das duas contas após o pagamento.
+Os testes de pagamento verificam tarifa, saldos, lançamentos, idempotência, falta de saldo, concorrência entre pagadores, depósito que quita uma cobrança ainda com transferência pendente e rollback após falha técnica. Os testes de cancelamento verificam cobranças pagas, novas tentativas de pagamento, transferências pendentes e a corrida entre cancelamento e processamento. A jornada de ponta a ponta verifica o processamento pelo worker e a conciliação das duas contas após o pagamento.
 
 Na CI, os testes de integração e unidade rodam antes de iniciar o worker; os testes de ponta a ponta rodam depois, com os três serviços ligados.
 
@@ -438,6 +462,6 @@ Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rot
 
 ## Estado do projeto
 
-O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento, receber o pagamento de outro cliente Kodama ou simular um recebimento externo, consultar saldos e extratos e verificar a consistência dos registros internos.
+O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento, cancelar uma cobrança ainda aberta, receber o pagamento de outro cliente Kodama ou simular um recebimento externo, consultar saldos e extratos e verificar a consistência dos registros internos.
 
 Pagamentos externos reais, emissão de boletos, Pix e documentos fiscais estão fora do escopo desta versão.

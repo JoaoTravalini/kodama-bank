@@ -42,6 +42,14 @@ def register_internal_token_middleware(application: FastAPI) -> None:
             and path_parts[2] == "charge-payments"
         )
 
+        is_client_charge_cancel = (
+            request.method == "POST"
+            and len(path_parts) == 5
+            and path_parts[0] == "accounts"
+            and path_parts[2] == "charges"
+            and path_parts[4] == "cancel"
+        )
+
         is_public = request.url.path in BYPASS_ENDPOINTS or (
             request.url.path == "/clients" and request.method == "POST"
         ) or (
@@ -54,7 +62,7 @@ def register_internal_token_middleware(application: FastAPI) -> None:
                 request.url.path == "/accounts"
                 or request.url.path.startswith("/accounts/")
             )
-        ) or is_client_transfer or is_client_charge or is_charge_payment
+        ) or is_client_transfer or is_client_charge or is_charge_payment or is_client_charge_cancel
 
         if request.method == "OPTIONS" or is_public:
             return await call_next(request)

@@ -48,6 +48,19 @@ class ServiceChargeRepository:
             .first()
         )
 
+    def get_by_key_for_update(
+        self, account_id: int, charge_key: UUID
+    ) -> ServiceCharge | None:
+        return (
+            self.session.query(ServiceCharge)
+            .filter(
+                ServiceCharge.account_id == account_id,
+                ServiceCharge.charge_key == charge_key,
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+
     def get_payment_record(self, charge: ServiceCharge):
         return (
             self.session.query(Transaction, AccountEntry)
