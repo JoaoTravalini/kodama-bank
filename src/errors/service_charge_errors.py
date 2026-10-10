@@ -50,3 +50,15 @@ class ServiceChargePaymentConflict(QIException):
             "The payment reference does not match an open charge, account, or amount.",
             "A referência não corresponde a uma cobrança aberta, conta ou valor.",
         )
+
+class ChargeReceiptUnavailable(QIException):
+    code = "KOD006005"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Charge receipt unavailable",
+            self.code,
+            409,
+            "The charge has not been paid yet.",
+            "A cobrança ainda não foi paga.",
+        )

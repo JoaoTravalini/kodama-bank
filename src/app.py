@@ -212,6 +212,11 @@ def create_app() -> FastAPI:
         service_charge_resource.on_get,
         methods=["GET"],
     )
+    application.add_api_route(
+        "/accounts/{account_key}/charges/{charge_key}/receipt",
+        service_charge_resource.on_get_receipt,
+        methods=["GET"],
+    )
 
     application.add_api_route(
     "/internal/accounts/{account_key}/reconciliation",

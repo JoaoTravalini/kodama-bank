@@ -6,6 +6,7 @@ from sqlalchemy import and_, func
 from database import Context
 from models.client import Account
 from models.service_charge import ServiceCharge
+from models.transaction import AccountEntry, Transaction
 
 
 class ServiceChargeRepository:
@@ -44,6 +45,21 @@ class ServiceChargeRepository:
                 ServiceCharge.account_id == account_id,
                 ServiceCharge.charge_key == charge_key,
             )
+            .first()
+        )
+
+    def get_payment_record(self, charge: ServiceCharge):
+        return (
+            self.session.query(Transaction, AccountEntry)
+            .outerjoin(
+                AccountEntry,
+                and_(
+                    AccountEntry.transaction_id == Transaction.id,
+                    AccountEntry.account_id == charge.account_id,
+                    AccountEntry.kind == "CREDIT",
+                ),
+            )
+            .filter(Transaction.id == charge.paid_transaction_id)
             .first()
         )
 

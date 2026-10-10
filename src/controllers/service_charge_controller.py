@@ -5,8 +5,9 @@ from uuid import UUID, uuid4
 from controllers.auth_controller import AuthController
 from controllers.base_controller import BaseController
 from errors.account_errors import AccountNotFound
-from errors.base_error import InvalidSchema
+from errors.base_error import InternalError, InvalidSchema
 from errors.service_charge_errors import (
+    ChargeReceiptUnavailable,
     InvalidChargeAmount,
     ProfessionalAccountRequired,
     ServiceChargeNotFound,
@@ -134,6 +135,64 @@ class ServiceChargeController(BaseController):
 
         today = self.repository.business_date()
         return self._response(charge, today)
+
+    def receipt(
+        self,
+        authorization: str | None,
+        account_key: UUID,
+        charge_key: UUID,
+    ) -> dict:
+        account = self._owned_account(authorization, account_key)
+        charge = self.repository.get_by_key(account.id, charge_key)
+        if charge is None:
+            raise ServiceChargeNotFound()
+        if charge.status != "PAID":
+            raise ChargeReceiptUnavailable()
+
+        record = self.repository.get_payment_record(charge)
+        if record is None:
+            raise InternalError()
+
+        transaction, credit = record
+        valid_payment = (
+            transaction.status == "COMPLETED"
+            and transaction.destination_account_id == account.id
+            and transaction.amount == charge.amount
+            and transaction.completed_at is not None
+            and charge.paid_at is not None
+            and credit is not None
+            and credit.amount == charge.amount
+            and (
+                (
+                    transaction.kind == "DEPOSIT"
+                    and transaction.external_reference == f"charge:{charge.charge_key}"
+                    and transaction.service_charge_id is None
+                )
+                or (
+                    transaction.kind == "TRANSFER"
+                    and transaction.service_charge_id == charge.id
+                    and transaction.source_account_id is not None
+                )
+            )
+        )
+        if not valid_payment:
+            raise InternalError()
+
+        return {
+            "charge_key": str(charge.charge_key),
+            "transaction_key": str(transaction.transaction_key),
+            "credit_entry_key": str(credit.entry_key),
+            "account_key": str(account.account_key),
+            "description": charge.description,
+            "amount_received": format(credit.amount, ".2f"),
+            "balance_after_credit": format(credit.balance_after, ".2f"),
+            "paid_at": charge.paid_at.isoformat(),
+            "payment_method": (
+                "KODAMA_TRANSFER"
+                if transaction.kind == "TRANSFER"
+                else "SIMULATED_INTERNAL_DEPOSIT"
+            ),
+        }
 
     def summary(
         self,

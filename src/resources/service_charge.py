@@ -59,3 +59,20 @@ class ServiceChargeResource:
             charge_key,
         )
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+
+    def on_get_receipt(
+        self,
+        request: Request,
+        account_key: UUID,
+        charge_key: UUID,
+    ) -> JSONResponse:
+        result = ServiceChargeController().receipt(
+            request.headers.get("Authorization"),
+            account_key,
+            charge_key,
+        )
+        return JSONResponse(
+            content=result,
+            status_code=status.HTTP_200_OK,
+            headers={"Cache-Control": "no-store"},
+        )

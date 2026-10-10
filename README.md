@@ -152,6 +152,7 @@ As migrações `005` e `006` podem ser executadas novamente sem duplicar suas co
 | `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta uma cobrança do titular |
 | `POST` | `/accounts/{source_account_key}/charge-payments` | JWT | Solicita o pagamento de uma cobrança usando a conta de origem |
 | `GET` | `/internal/accounts/{account_key}/reconciliation` | `INTERNAL-TOKEN` | Verifica a consistência interna da conta e das cobranças pagas |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}/receipt` | JWT | Consulta o comprovante de uma cobrança paga |
 
 Nas rotas de consulta do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente. A rota de conciliação é interna: o JWT do cliente não a autoriza.
 
@@ -260,6 +261,12 @@ Para consultar uma cobrança:
 GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY
 Authorization: Bearer SEU_JWT
 ```
+Após a quitação, o titular da conta profissional pode consultar
+`GET /accounts/{account_key}/charges/{charge_key}/receipt` com seu JWT.
+O JSON reúne a cobrança, a transação concluída e o crédito no extrato.
+Uma cobrança aberta retorna `409`; outro cliente recebe `404`.
+`SIMULATED_INTERNAL_DEPOSIT` indica uma operação simulada, não um
+pagamento bancário real.
 
 ### Pagamento da cobrança por outro cliente
 
