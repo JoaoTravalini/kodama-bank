@@ -16,6 +16,88 @@ Profissionais autônomos precisam separar o dinheiro pessoal do profissional e a
 
 A solução reúne uma API em Python com FastAPI, PostgreSQL e um worker, executados pelo Docker Compose. A API autentica clientes com JWT e restringe o acesso às suas contas; depósitos simulados e conciliação exigem token interno. Transferências e estornos são persistidos como pendentes e processados pelo worker. Bloqueios protegem os registros concorrentes, enquanto saldos, lançamentos e estados são confirmados na mesma transação de banco. Chaves de idempotência e referências únicas recuperam solicitações repetidas sem nova movimentação. O estorno gera uma operação inversa vinculada ao pagamento, preservando o histórico original. Extrato e comprovantes permitem consultar as movimentações, e a conciliação compara os registros em uma visão consistente dos dados.
 
+### Objetivos do produto
+
+O produto foi desenhado para atender a um caso específico de banco digital para profissionais autônomos, com foco em clareza de regras, fácil operação e integridade financeira. Os objetivos centrais são:
+
+- isolar o patrimônio pessoal do patrimônio profissional do mesmo cliente;
+- preservar o histórico financeiro como base para auditoria e entendimento de eventos;
+- evitar duplicidade de efeitos financeiros em operações repetidas ou concorrentes;
+- permitir diagnósticos claros em caso de saldo inconsistente, falha técnica ou rejeição por regra de negócio;
+- reduzir a superfície de risco de bugs financeiros em uma aplicação que manipula saldos, taxas e recorrência de pagamentos.
+
+### Escopo e não escopo
+
+Este projeto cobre:
+
+- cadastro de clientes com contas pessoal e profissional;
+- autenticação por JWT;
+- depósitos internos simulados;
+- transferências entre contas e processamento assíncrono;
+- cobrança de serviços, pagamento e cancelamento;
+- estorno de cobrança paga por transferência;
+- extrato, comprovante e conciliação interna.
+
+Ficam fora do escopo desta entrega:
+
+- Pix real, TED, DOC e pagamentos externos;
+- boletos emitidos por terceiros;
+- estornos parciais;
+- dinheiro real ou contas bancárias reais;
+- múltiplos ambientes de execução com infraestrutura de alta disponibilidade;
+- comunicação assíncrona com broker externo;
+- dashboard analítico de negócios ou BI.
+
+### Princípios de desenho
+
+A implementação adota alguns princípios que orientam a modelagem e a operação do sistema:
+
+1. Integridade antes de conveniência: qualquer operação que altera saldo ou estado deve ser validada e confirmada em uma transação consistente.
+2. Transparência operacional: falhas técnicas e rejeições por regra de negócio ficam persistidas no banco e são visíveis por consulta.
+3. Idempotência por contrato: chaves e referências são as fronteiras de segurança para repetir a mesma intenção sem duplicar efeitos financeiros.
+4. Separação clara de responsabilidades: API valida entrada e autenticação; worker executa processamento financeiro; banco consolida regras de consistência e histórico.
+5. Diagnóstico em produção: o log e as consultas de estado devem permitir responder "o que aconteceu" e "quem ganhou/perdeu" sem depender de um ambiente de debug.
+
+### Estratégia de concorrência e consistência
+
+O sistema foi desenhado para reduzir o risco de race conditions, especialmente em operações que dependem de saldo e estado de cobrança. A estratégia inclui:
+
+- bloqueio de linhas (`SELECT ... FOR UPDATE`) nas contas e, quando necessário, na cobrança;
+- ordenação das contas por ID para evitar deadlocks em operações entre contas diferentes;
+- validações de regra de negócio antes e depois do bloqueio, para garantir que a operação correta seja confirmada;
+- transações de banco para equilibrar saldos, lançamentos e estados em um único commit;
+- estado persistente de pendência para garantir retomada após falha do worker;
+- chaves de idempotência compartilhadas por domínio para reduzir duplicação de efeito mesmo quando o cliente retenta a operação.
+
+### Observabilidade e operação
+
+Mesmo em uma aplicação de demonstração, o desenho operacional deve permitir rastreabilidade. O sistema registra:
+
+- requisições e respostas da API;
+- chamadas para serviços externos e tempos de resposta;
+- processamento de pendentes pelo worker;
+- rejeições por regra de negócio e motivos específicos;
+- transações concluídas, rejeitadas ou permanentes em estado pendente.
+
+Esses eventos são fundamentais para responder a perguntas como:
+
+- a operação foi aceita e ainda está pendente?
+- a operação foi rejeitada por regra de negócio ou por falha técnica?
+- houve divergência de saldo após processamento concorrente?
+- qual foi a causa de rejeição do registro?
+
+### Segurança e autenticação
+
+A camada de segurança foi pensada em três níveis:
+
+- autenticação de cliente via JWT para operações do usuário;
+- autorização por propriedade para garantir que cliente só acesse suas contas, cobranças e comprovantes;
+- validação de token interno para operações sensíveis do sistema, como depósitos e conciliação.
+
+A aplicação também evita exposição de dados sensíveis e mantém a senha em hash com salt aleatório. O JWT não é usado para operações internas e nem substitui o controle de acesso por conta/cliente.
+
+### Trade-offs e decisões descartadas
+
 - **Event Sourcing com CQRS:** descartado pelo custo de versionar eventos, reconstruir estados e manter projeções de consulta. Ganharia valor com necessidade de reconstrução histórica mais ampla e diferentes modelos de leitura; nesta entrega, saldo, lançamentos e estados são gravados juntos no PostgreSQL.
 
 - **RabbitMQ com Transactional Outbox:** descartado por exigir broker, publicador e tratamento de entregas repetidas. Ganharia valor com múltiplos consumidores ou integrações por eventos; o worker atual retoma os pendentes persistidos no banco.
@@ -23,6 +105,20 @@ A solução reúne uma API em Python com FastAPI, PostgreSQL e um worker, execut
 - **Redis:** descartado por adicionar configuração e coordenação sem uma necessidade demonstrada. Poderia ser considerado para um caso concreto de cache ou fila; não é necessário para persistir e retomar as operações desta entrega.
 
 - **OpenTelemetry e Jaeger:** adiados pelo custo de instrumentar e propagar contexto entre API e worker. Ganhariam valor com maior necessidade de diagnóstico distribuído; nesta entrega, logs registram requisições e resultados do processamento.
+
+### Estratégia de testes e validação
+
+A suíte de testes cobre, em diferentes níveis, os riscos mais relevantes do produto. Em especial:
+
+- autenticação e autorização;
+- rejeições por dados inválidos e regras de negócio;
+- concorrência e idempotência;
+- processamento pendente do worker;
+- recuperação após falha e reinicialização do worker;
+- divergência financeira detectada por conciliação;
+- estabilidade de comprovantes e históricos financeiros.
+
+A intenção é validar não apenas os casos básicos de sucesso, mas também a operação em cenários de disputa, reenvio e falha técnica, que são os mais críticos em sistemas financeiros.
 
 ## Implementação
 
