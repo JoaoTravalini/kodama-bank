@@ -9,7 +9,18 @@ from middlewares import (
     register_request_logger_middleware,
     register_session_manager_middleware,
 )
-from resources import AccountResource, AuthResource, ClientResource, HealthCheckResource, DepositResource, TransferResource, ServiceChargeResource, ReconciliationResource, ChargePaymentResource
+from resources import (
+    AccountResource,
+    AuthResource,
+    ChargePaymentResource,
+    ChargeRefundResource,
+    ClientResource,
+    DepositResource,
+    HealthCheckResource,
+    ReconciliationResource,
+    ServiceChargeResource,
+    TransferResource,
+)
 from utils.logger import setup_logging
 
 
@@ -131,6 +142,7 @@ def create_app() -> FastAPI:
     service_charge_resource = ServiceChargeResource()
     reconciliation_resource = ReconciliationResource()
     charge_payment_resource = ChargePaymentResource()
+    charge_refund_resource = ChargeRefundResource()
 
     application.add_api_route("/", health_check_resource.on_get_home, methods=["GET"])
     application.add_api_route(
@@ -217,10 +229,27 @@ def create_app() -> FastAPI:
         service_charge_resource.on_get_receipt,
         methods=["GET"],
     )
+
     application.add_api_route(
         "/accounts/{account_key}/charges/{charge_key}/cancel",
         service_charge_resource.on_post_cancel,
         methods=["POST"],
+    )
+
+    application.add_api_route(
+        "/accounts/{account_key}/charges/{charge_key}/refunds",
+        charge_refund_resource.on_post,
+        methods=["POST"],
+    )
+    application.add_api_route(
+        "/accounts/{account_key}/charges/{charge_key}/refunds/{transaction_key}",
+        charge_refund_resource.on_get,
+        methods=["GET"],
+    )
+    application.add_api_route(
+        "/accounts/{account_key}/charges/{charge_key}/refunds/{transaction_key}/receipt",
+        charge_refund_resource.on_get_receipt,
+        methods=["GET"],
     )
 
     application.add_api_route(

@@ -1,4 +1,12 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 
 from models.base import Base
@@ -15,6 +23,10 @@ class Transaction(Base):
     fee = Column(Numeric(18, 2), nullable=False, server_default="0")
     source_account_id = Column(Integer, ForeignKey("accounts.id"))
     service_charge_id = Column(Integer, ForeignKey("service_charges.id"))
+    refund_of_transaction_id = Column(
+        Integer,
+        ForeignKey("transactions.id"),
+    )
     destination_account_id = Column(
         Integer,
         ForeignKey("accounts.id"),

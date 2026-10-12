@@ -15,7 +15,7 @@ def pending_batch(after_id: int):
         return (
             session.query(Transaction.id, Transaction.transaction_key)
             .filter(
-                Transaction.kind == "TRANSFER",
+                Transaction.kind.in_(("TRANSFER", "REFUND")),
                 Transaction.status == "PENDING",
                 Transaction.id > after_id,
             )
@@ -23,7 +23,6 @@ def pending_batch(after_id: int):
             .limit(BATCH_SIZE)
             .all()
         )
-
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)

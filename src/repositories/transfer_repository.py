@@ -38,7 +38,6 @@ class TransferRepository:
         return (
             self.session.query(Transaction)
             .filter(
-                Transaction.kind == "TRANSFER",
                 Transaction.source_account_id == source_account_id,
                 Transaction.idempotency_key == idempotency_key,
             )

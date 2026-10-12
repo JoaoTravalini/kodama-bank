@@ -10,3 +10,4 @@ COPY migrations/004_service_charges.sql /docker-entrypoint-initdb.d/04.sql
 COPY migrations/005_charge_due_date.sql /docker-entrypoint-initdb.d/05.sql
 COPY migrations/006_charge_payments.sql /docker-entrypoint-initdb.d/06.sql
 COPY migrations/007_charge_cancellation.sql /docker-entrypoint-initdb.d/07.sql
+COPY migrations/008_charge_refunds.sql /docker-entrypoint-initdb.d/08.sql

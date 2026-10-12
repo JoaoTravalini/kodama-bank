@@ -1,4 +1,13 @@
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 
 from models.base import Base
@@ -19,6 +28,12 @@ class ServiceCharge(Base):
         ForeignKey("transactions.id"),
         unique=True,
     )
+    refunded_transaction_id = Column(
+        Integer,
+        ForeignKey("transactions.id"),
+        unique=True,
+    )
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     paid_at = Column(DateTime)
     canceled_at = Column(DateTime)
+    refunded_at = Column(DateTime)

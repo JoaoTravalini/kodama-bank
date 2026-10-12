@@ -7,3 +7,4 @@ from resources.transfer import TransferResource
 from resources.service_charge import ServiceChargeResource
 from resources.reconciliation import ReconciliationResource
 from resources.charge_payment import ChargePaymentResource
+from resources.charge_refund import ChargeRefundResource

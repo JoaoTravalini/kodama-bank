@@ -54,6 +54,11 @@ class ServiceChargeController(BaseController):
                 if charge.canceled_at is not None
                 else None
             ),
+            "refunded_at": (
+                charge.refunded_at.isoformat()
+                if charge.refunded_at is not None
+                else None
+            ),
         }
 
     def _owned_account(self, authorization: str | None, account_key: UUID):
@@ -153,7 +158,7 @@ class ServiceChargeController(BaseController):
         charge = self.repository.get_by_key(account.id, charge_key)
         if charge is None:
             raise ServiceChargeNotFound()
-        if charge.status != "PAID":
+        if charge.status not in ("PAID", "REFUNDED"):
             raise ChargeReceiptUnavailable()
 
         record = self.repository.get_payment_record(charge)
@@ -215,7 +220,7 @@ class ServiceChargeController(BaseController):
         if charge is None:
             raise ServiceChargeNotFound()
 
-        if charge.status == "PAID":
+        if charge.status in ("PAID", "REFUNDED"):
             raise ChargeCancellationConflict()
 
         if charge.status == "OPEN":
@@ -256,5 +261,9 @@ class ServiceChargeController(BaseController):
             "paid": {
                 "count": totals.paid_count,
                 "amount": format(totals.paid_amount, ".2f"),
+            },
+            "refunded": {
+                "count": totals.refunded_count,
+                "amount": format(totals.refunded_amount, ".2f"),
             },
         }

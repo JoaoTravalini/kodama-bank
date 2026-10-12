@@ -1,172 +1,225 @@
 # Kodama Bank
 
-API bancária para profissionais autônomos. O projeto implementa cadastro, autenticação, contas pessoal e profissional, depósitos simulados, transferências, extrato, cobranças por serviços prestados, pagamento dessas cobranças entre clientes e conciliação interna.
+API bancária demonstrativa para profissionais autônomos, desenvolvida para o desafio do Bootcamp QI Tech 2026.
 
-> Este é um projeto demonstrativo. Os saldos e pagamentos são simulados: a aplicação não emite boletos, não realiza Pix e não movimenta dinheiro real.
+O sistema separa contas pessoal e profissional e permite acompanhar serviços a receber, receber pagamentos, movimentar saldos, cancelar cobranças abertas e devolver pagamentos concluídos. Extratos, comprovantes e conciliação interna permitem consultar e verificar o histórico financeiro.
+
+Os depósitos e pagamentos são simulados. O projeto não realiza Pix, não emite boletos e não movimenta dinheiro real.
+
+## Tecnologias
+
+- Python 3.11 e FastAPI.
+- PostgreSQL 16 e SQLAlchemy.
+- PyJWT para autenticação.
+- Docker Compose para executar API, banco e worker.
+- pytest para testes de unidade, integração e ponta a ponta.
 
 ## Funcionalidades
 
-- Cadastro de cliente com validação de CPF e criação das contas pessoal e profissional.
-- Login com JWT e consulta ao perfil do cliente.
-- Consulta de contas restrita ao proprietário.
-- Depósito simulado autorizado por `INTERNAL-TOKEN`, com proteção contra crédito duplicado.
-- Solicitação de transferência com chave de idempotência.
-- Transferências gratuitas entre contas do mesmo cliente. Entre clientes diferentes, tarifa de 0,5% do valor, limitada a R$ 2,00.
-- Processamento de transferências por um worker separado da API.
-- Rejeição de transferências sem saldo suficiente ou que ultrapassem o limite da conta de destino.
-- Lançamentos de crédito, débito e tarifa registrados junto com a atualização dos saldos.
-- Extrato paginado por conta, protegido por JWT.
-- Registro e consulta de cobranças por serviços na conta profissional.
-- Agenda de recebíveis com vencimento opcional, identificação de atrasos e resumo de valores abertos, atrasados e pagos.
-- Pagamento de cobrança por outro cliente com o saldo de uma conta Kodama.
-- Quitação simulada de cobrança por depósito interno.
-- Cancelamento de cobrança aberta, preservando o histórico e impedindo pagamentos posteriores.
-- Conciliação interna protegida por `INTERNAL-TOKEN`, que identifica divergências entre saldo, lançamentos e cobranças pagas.
+- Cadastro com validação de CPF, unicidade de CPF/e-mail e criação automática das contas pessoal e profissional.
+- Armazenamento de senhas como hash com salt aleatório.
+- Login com JWT e consulta ao perfil autenticado.
+- Consulta de contas, saldos e extratos restrita ao proprietário.
+- Depósitos internos simulados, protegidos contra crédito duplicado.
+- Transferências com idempotência e processamento assíncrono.
+- Registro de créditos, débitos e tarifas no extrato.
+- Cobranças por serviços prestados na conta profissional.
+- Vencimento opcional, identificação de atraso e resumo de recebíveis.
+- Pagamento de cobrança por outro cliente Kodama.
+- Quitação de cobrança por depósito interno simulado.
+- Cancelamento de cobranças abertas, preservando o histórico.
+- Estorno integral de cobranças pagas por transferência entre clientes.
+- Comprovantes de pagamento e de estorno em JSON.
+- Conciliação interna de saldos, lançamentos, pagamentos e estornos.
+- Retomada de operações pendentes após indisponibilidade do worker.
 
-## Fluxos principais
+## Arquitetura
 
-### Transferência
+A aplicação possui três serviços:
 
-1. O cliente solicita a transferência pela API. Ela é registrada como `PENDING`.
-2. O worker procura transferências pendentes no PostgreSQL.
-3. Ele verifica saldo e limite da conta de destino.
-4. Se a transferência puder ser feita, atualiza os saldos, registra os lançamentos e marca a operação como `COMPLETED`.
-5. Se alguma regra impedir a transferência, marca a operação como `REJECTED` e registra o motivo. Nesse caso, não movimenta saldos nem cobra tarifa.
+| Serviço | Responsabilidade |
+| --- | --- |
+| `api` | Recebe requisições, autentica clientes, aplica regras e registra solicitações |
+| `db` | Persiste clientes, contas, transações, lançamentos e cobranças |
+| `worker` | Busca transferências e estornos pendentes e executa a movimentação financeira |
 
-O processamento usa uma transação de banco e bloqueia as linhas envolvidas. Uma falha técnica desfaz uma operação incompleta, e transferências concorrentes não podem gastar o mesmo saldo duas vezes.
+Os pendentes ficam no PostgreSQL. Não há um broker de mensagens externo.
 
-### Cobrança por serviço
+A API registra transferências e estornos como `PENDING`. O worker consulta esses registros e confirma ou rejeita cada operação.
 
-1. O autônomo registra na conta profissional um serviço prestado, o valor a receber e, opcionalmente, a data de vencimento. A cobrança começa como `OPEN` e não altera o saldo.
-2. A API devolve uma chave da cobrança e uma referência no formato `charge:UUID`.
-3. A cobrança pode ser paga por outro cliente Kodama com o saldo de uma de suas contas, ou por um depósito interno simulado com a referência e o valor exato.
-4. Um pagamento concluído registra o crédito no extrato, atualiza o saldo e altera a cobrança para `PAID` na mesma transação de banco.
+Durante o processamento, o worker bloqueia a transação, as contas em ordem crescente de ID e, quando aplicável, a cobrança. As regras financeiras são verificadas sob esses bloqueios.
 
-Uma cobrança `OPEN` com vencimento anterior à data atual em São Paulo aparece com `overdue: true`; ela continua `OPEN` no banco. Vencimento no dia atual ainda não é atraso. Depois do pagamento, `overdue` passa a `false`. O resumo de recebíveis soma todas as cobranças da conta profissional, independentemente da paginação da listagem; `overdue` é um subconjunto de `open`.
+Saldos, lançamentos e estados são confirmados na mesma transação de banco. Uma falha técnica anterior ao commit provoca rollback e mantém a operação pendente para nova tentativa.
 
-O titular também pode cancelar uma cobrança `OPEN`. Ela continua no histórico como `CANCELED`, sai dos valores em aberto e não pode mais ser paga. Uma cobrança `PAID` não pode ser cancelada; pagamentos pendentes são rejeitados pelo worker sem débito quando encontram a cobrança cancelada.
+## Regras financeiras
 
-### Pagamento por outro cliente
+### Valores e tarifas
 
-1. O pagador autenticado informa a chave de uma cobrança e uma chave de idempotência, usando sua conta como origem.
-2. A API obtém o valor e a conta de destino da cobrança. A solicitação cria uma transferência `PENDING`, sem movimentar saldo naquele momento.
-3. O worker confere a cobrança, o saldo do pagador e o limite da conta de destino.
-4. Ao concluir, ele debita o valor e a tarifa da origem, credita o valor integral na conta profissional e marca a cobrança como `PAID` na mesma transação de banco.
-5. Se faltar saldo, a transferência é rejeitada e a cobrança permanece `OPEN`, podendo receber uma nova tentativa com outra chave de idempotência.
+Os valores recebidos pela API usam strings decimais com duas casas, como `"100.00"`. O código utiliza `Decimal`, e o banco utiliza `NUMERIC(18,2)`.
 
-O titular da cobrança não pode pagá-la com suas próprias contas. Se duas pessoas tentarem pagar a mesma cobrança, somente uma operação poderá concluí-la: a outra será rejeitada sem débito. A tarifa segue a regra das transferências entre clientes e só é cobrada quando o pagamento é concluído.
+- Transferências entre contas do mesmo cliente são gratuitas.
+- Entre clientes diferentes, a tarifa é de 0,5% do valor, arredondada para centavos com `ROUND_HALF_UP` e limitada a R$ 2,00.
+- A origem precisa ter saldo para valor mais tarifa.
+- O destino recebe o valor integral.
+- A tarifa só é debitada quando a operação é concluída.
+- Uma tarifa de valor zero não gera lançamento `FEE`.
+- Operações rejeitadas não alteram saldos nem geram lançamentos.
+- O saldo máximo considerado pelo processamento é `9999999999999999.99`.
 
-Repetir a mesma solicitação com a mesma chave de idempotência recupera a transferência existente, inclusive depois de concluída ou rejeitada. Uma nova tentativa de pagar uma cobrança já quitada recebe conflito.
+### Idempotência
 
-### Depósito interno para quitar cobrança
+| Operação | Proteção contra repetição |
+| --- | --- |
+| Depósito | `external_reference` única |
+| Transferência comum | Conta de origem e `idempotency_key` |
+| Pagamento de cobrança | Conta de origem e `idempotency_key` |
+| Estorno | Conta de origem e `idempotency_key` |
+| Cancelamento | Estado da cobrança e preservação da data original |
 
-Uma operação interna pode simular o recebimento externo de uma cobrança enviando um depósito para a conta profissional com a referência `charge:UUID` e o valor exato. Depósito, lançamento, saldo e estado `PAID` são salvos juntos.
+Transferências, pagamentos de cobrança e estornos compartilham o espaço de chaves da mesma conta de origem. Uma chave usada em uma dessas operações não pode identificar outra operação diferente nessa conta.
 
-Repetir o mesmo depósito recupera a operação existente, sem novo crédito. Uma referência desconhecida, conta diferente ou valor divergente são recusados sem movimentar o saldo. Se um depósito quitar a cobrança enquanto há uma transferência `PENDING` para pagá-la, o worker rejeita essa transferência sem debitar o pagador.
+O consumidor da API gera uma UUID para cada intenção de operação e reutiliza essa chave ao repetir o mesmo pedido. A API recebe a chave e aplica a proteção contra duplicação.
 
-Esse fluxo demonstra a integração com um recebimento externo; ele **não comprova que dinheiro entrou por uma instituição financeira real**.
+Repetir uma operação com a mesma chave e os mesmos dados recupera seu resultado existente. Reutilizar a chave com outros dados gera conflito.
 
-### Conciliação interna
+Uma operação rejeitada continua rejeitada quando sua chave é repetida. Para uma nova tentativa, use outra chave.
 
-Uma rota interna consulta uma conta e compara seu saldo armazenado com a soma dos lançamentos do extrato. Para cada cobrança `PAID`, também verifica se existe um pagamento concluído associado a ela e um lançamento de crédito com o valor correto.
+Criar uma cobrança não usa chave de idempotência: cada chamada válida cria uma nova cobrança. No cadastro, CPF e e-mail únicos impedem duplicatas.
 
-A associação é conferida pela referência `charge:UUID` nos depósitos internos ou pelo vínculo com a cobrança nas transferências entre clientes. A consulta usa uma visão consistente dos dados e não altera saldos ou cobranças. Quando encontra uma divergência, devolve `consistent: false` e os problemas detectados.
+### Estados
 
-Essa conciliação verifica os registros **dentro do Kodama Bank**; ela não comprova liquidação por uma instituição externa nem repara divergências automaticamente.
+| Registro | Estados |
+| --- | --- |
+| Transação | `PENDING`, `COMPLETED`, `REJECTED` |
+| Cobrança | `OPEN`, `PAID`, `CANCELED`, `REFUNDED` |
 
-## Requisitos
+Uma cobrança começa como `OPEN`, sem movimentar dinheiro. O pagamento concluído a torna `PAID`; o cancelamento de uma cobrança aberta a torna `CANCELED`; a devolução concluída a torna `REFUNDED`.
 
-- Docker com Docker Compose.
-- Python 3.11 para executar os testes na máquina local.
+O atraso não é um estado separado no banco. Uma cobrança `OPEN` com vencimento anterior à data atual em São Paulo recebe `overdue: true`. Vencimento no dia atual ainda não é atraso.
 
 ## Executar localmente
 
-O arquivo `.env` é opcional para testes locais: o Docker Compose possui valores de demonstração. Para definir seus próprios segredos, crie um `.env` na raiz:
+É necessário ter Docker com Docker Compose. Python 3.11 é necessário para executar os testes na máquina local.
+
+Na raiz do repositório:
+
+```bash
+docker compose up -d --build --wait
+docker compose ps
+```
+
+O Compose inicia API, PostgreSQL e worker. API e banco devem aparecer como `healthy`; o worker deve estar em execução.
+
+A API utiliza `http://127.0.0.1:3000`.
+
+```bash
+curl -i http://127.0.0.1:3000/health_check
+```
+
+Resposta esperada: `204 No Content`.
+
+### Configuração
+
+O `.env` é opcional para a demonstração local. O Compose fornece valores padrão para iniciar o projeto.
+
+Para usar configurações próprias, crie um `.env` na raiz:
 
 ```dotenv
 JWT_SECRET=SUBSTITUA_POR_UM_SEGREDO_ALEATORIO_LONGO
 INTERNAL_TOKEN=SUBSTITUA_POR_UM_TOKEN_LOCAL
 ```
 
-Para gerar uma chave JWT:
+Uma chave pode ser gerada com:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Não versione o arquivo `.env`.
+Não versione o `.env`. Os valores padrão são destinados à demonstração local.
 
-Suba os serviços:
+Se uma porta estiver ocupada, configure `API_PORT` ou `DB_PORT` no `.env`, por exemplo:
 
-```bash
-docker compose up -d --build
-docker compose ps
+```dotenv
+API_PORT=3001
+DB_PORT=5433
 ```
 
-O Compose inicia `api`, `db` (PostgreSQL) e `worker`. Aguarde a API e o banco aparecerem como `healthy`. A API responde em `http://127.0.0.1:3000`.
+Nesse caso, ajuste a porta nos comandos HTTP. Os testes carregam as configurações locais pelo `.env`.
 
-Verifique:
+### Banco e migrações
 
-```bash
-curl -i http://127.0.0.1:3000/health_check
-```
+Em uma instalação nova, o Docker inicializa o banco com `database/database.sql` e as migrações copiadas pelo `database/Dockerfile`.
 
-A resposta esperada é `204 No Content`.
+| Migração | Alteração |
+| --- | --- |
+| `002_transactions.sql` | Transações e lançamentos financeiros |
+| `003_transfer_rejection_reason.sql` | Motivos de rejeição |
+| `004_service_charges.sql` | Cobranças por serviços |
+| `005_charge_due_date.sql` | Vencimento das cobranças |
+| `006_charge_payments.sql` | Vínculo entre transferências e cobranças |
+| `007_charge_cancellation.sql` | Cancelamento de cobranças |
+| `008_charge_refunds.sql` | Estornos e estado `REFUNDED` |
 
-Os scripts SQL em `database/` são aplicados automaticamente **somente quando um banco novo é inicializado**. Reconstruir a imagem não reaplica migrações a um volume existente. Para um banco local existente, execute apenas as migrações que ainda faltam, na ordem.
+Os scripts de inicialização são executados somente quando um banco novo é criado. Reconstruir a imagem não reaplica migrações a uma base existente.
 
-Se o banco ainda não possui a tabela de cobranças, aplique:
-
-```bash
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/004_service_charges.sql
-```
-
-Se ainda não possui a coluna `due_date`, aplique:
-
-```bash
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/005_charge_due_date.sql
-```
-
-Se ainda não possui a coluna `service_charge_id` em `transactions`, aplique:
+Em uma base existente, aplique apenas as migrações ainda não executadas, na ordem. Por exemplo, para uma base que já possui as anteriores e ainda não recebeu a migração de estornos:
 
 ```bash
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/006_charge_payments.sql
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/008_charge_refunds.sql
 ```
 
-As migrações `005` e `006` podem ser executadas novamente sem duplicar suas colunas. A conciliação interna não exige uma migração própria.
+Não reaplique indiscriminadamente todos os scripts a uma base já atualizada.
 
-Para uma base existente sem o estado de cancelamento, aplique também:
+## Autenticação e acesso
 
-```bash
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U bootcamp -d bootcamp < database/migrations/007_charge_cancellation.sql
+As rotas do cliente exigem:
+
+```http
+Authorization: Bearer SEU_JWT
 ```
+
+O JWT é obtido pelo login. Contas e cobranças de outro cliente recebem `404`, assim como registros inexistentes.
+
+Depósitos simulados e conciliação exigem:
+
+```http
+INTERNAL-TOKEN: SEU_TOKEN_INTERNO
+```
+
+JWT não autoriza essas operações internas. O token interno também não substitui o JWT nas rotas do cliente.
 
 ## Rotas
 
-| Método | Rota | Autorização | Descrição |
+| Método | Caminho | Autorização | Função |
 | --- | --- | --- | --- |
-| `GET` | `/health_check` | Nenhuma | Verifica se a API está respondendo |
-| `POST` | `/clients` | Nenhuma | Cadastra cliente e cria suas duas contas |
-| `POST` | `/auth/login` | Nenhuma | Retorna um JWT |
-| `GET` | `/clients/me` | JWT | Consulta o perfil autenticado |
-| `GET` | `/accounts` | JWT | Lista as contas do cliente |
-| `GET` | `/accounts/{account_key}` | JWT | Consulta uma conta do cliente |
-| `POST` | `/accounts/{account_key}/deposits` | `INTERNAL-TOKEN` | Registra um depósito simulado |
-| `POST` | `/accounts/{account_key}/transfers` | JWT | Solicita uma transferência |
-| `GET` | `/accounts/{account_key}/transfers/{transaction_key}` | JWT | Consulta o estado de uma transferência |
-| `GET` | `/accounts/{account_key}/entries` | JWT | Consulta o extrato da conta |
-| `POST` | `/accounts/{account_key}/charges` | JWT | Registra uma cobrança na conta profissional |
-| `GET` | `/accounts/{account_key}/charges` | JWT | Lista as cobranças da conta |
-| `GET` | `/accounts/{account_key}/charges/summary` | JWT | Resume os recebíveis da conta profissional |
-| `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta uma cobrança do titular |
-| `GET` | `/accounts/{account_key}/charges/{charge_key}/receipt` | JWT | Consulta o comprovante de uma cobrança paga |
-| `POST` | `/accounts/{account_key}/charges/{charge_key}/cancel` | JWT | Cancela uma cobrança aberta |
-| `POST` | `/accounts/{source_account_key}/charge-payments` | JWT | Solicita o pagamento de uma cobrança usando a conta de origem |
-| `GET` | `/internal/accounts/{account_key}/reconciliation` | `INTERNAL-TOKEN` | Verifica a consistência interna da conta e das cobranças pagas |
+| `GET` | `/` | Nenhuma | Identificação do serviço |
+| `GET` | `/health_check` | Nenhuma | Verificação de resposta da API |
+| `POST` | `/clients` | Nenhuma | Cadastro e criação das duas contas |
+| `POST` | `/auth/login` | Nenhuma | Emissão de JWT |
+| `GET` | `/clients/me` | JWT | Perfil autenticado |
+| `GET` | `/accounts` | JWT | Contas do cliente |
+| `GET` | `/accounts/{account_key}` | JWT | Conta e saldo |
+| `GET` | `/accounts/{account_key}/entries` | JWT | Extrato paginado |
+| `POST` | `/accounts/{account_key}/deposits` | Token interno | Depósito simulado |
+| `POST` | `/accounts/{source_account_key}/transfers` | JWT | Solicitação de transferência |
+| `GET` | `/accounts/{source_account_key}/transfers/{transaction_key}` | JWT | Resultado da transferência |
+| `POST` | `/accounts/{account_key}/charges` | JWT | Criação de cobrança |
+| `GET` | `/accounts/{account_key}/charges` | JWT | Listagem de cobranças |
+| `GET` | `/accounts/{account_key}/charges/summary` | JWT | Resumo de recebíveis |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}` | JWT | Consulta de cobrança |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}/receipt` | JWT | Comprovante do pagamento original |
+| `POST` | `/accounts/{account_key}/charges/{charge_key}/cancel` | JWT | Cancelamento de cobrança aberta |
+| `POST` | `/accounts/{source_account_key}/charge-payments` | JWT | Pagamento de cobrança |
+| `POST` | `/accounts/{account_key}/charges/{charge_key}/refunds` | JWT | Solicitação de estorno |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}/refunds/{transaction_key}` | JWT | Resultado do estorno |
+| `GET` | `/accounts/{account_key}/charges/{charge_key}/refunds/{transaction_key}/receipt` | JWT | Comprovante do estorno |
+| `GET` | `/internal/accounts/{account_key}/reconciliation` | Token interno | Conciliação interna |
 
-Nas rotas de consulta do cliente, uma conta de outro cliente recebe `404`, assim como uma conta inexistente. A rota de conciliação é interna: o JWT do cliente não a autoriza.
+## Exemplos de requisição
 
-### Cadastro
+Os exemplos abaixo usam a notação HTTP. Substitua os identificadores e tokens pelos valores retornados pela aplicação.
+
+### Cadastro e login
 
 ```http
 POST /clients
@@ -176,13 +229,11 @@ Content-Type: application/json
   "name": "Maria Silva",
   "email": "maria@example.com",
   "document_number": "52998224725",
-  "password": "SenhaDeTeste123!"
+  "password": "SenhaDeTeste123"
 }
 ```
 
-O CPF de exemplo serve apenas para testes locais. Use outro CPF válido ao repetir o cadastro, pois o sistema impede duplicatas.
-
-### Login
+O CPF de exemplo é destinado a testes. CPF e e-mail devem ser diferentes em novos cadastros.
 
 ```http
 POST /auth/login
@@ -190,181 +241,224 @@ Content-Type: application/json
 
 {
   "email": "maria@example.com",
-  "password": "SenhaDeTeste123!"
+  "password": "SenhaDeTeste123"
 }
 ```
 
-Nas rotas do cliente, envie o token recebido no cabeçalho:
-
-```http
-Authorization: Bearer SEU_JWT
-```
+Use o `access_token` retornado nas rotas do cliente.
 
 ### Depósito simulado
 
 ```http
-POST /accounts/SUA_CHAVE_DE_CONTA/deposits
-INTERNAL-TOKEN: SEU_TOKEN_LOCAL
+POST /accounts/ACCOUNT_KEY/deposits
+INTERNAL-TOKEN: SEU_TOKEN_INTERNO
 Content-Type: application/json
 
 {
-  "amount": "100.00",
-  "external_reference": "pagamento-teste-001"
+  "amount": "100.50",
+  "external_reference": "deposito-demo-001"
 }
 ```
 
-`external_reference` identifica o depósito. Repetir a referência com os mesmos dados não credita a conta novamente; reutilizá-la com dados diferentes gera conflito.
+Repetir conta, valor e referência recupera o depósito sem novo crédito. Usar a referência com outros dados retorna `409`.
 
-Referências que começam com `charge:` são reservadas para pagamentos simulados de cobranças.
+Referências iniciadas por `charge:` são reservadas para quitação de cobranças.
 
-### Cobrança por serviço
-
-O cliente registra um valor a receber em sua **conta profissional**:
+### Transferência comum
 
 ```http
-POST /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges
+POST /accounts/SOURCE_ACCOUNT_KEY/transfers
 Authorization: Bearer SEU_JWT
+Content-Type: application/json
+
+{
+  "destination_account_key": "DESTINATION_ACCOUNT_KEY",
+  "amount": "40.00",
+  "idempotency_key": "2b137445-6846-4381-b3ab-59042970f4f0"
+}
+```
+
+A resposta `202` informa uma operação `PENDING`, sem movimentação imediata. Consulte o resultado:
+
+```http
+GET /accounts/SOURCE_ACCOUNT_KEY/transfers/TRANSACTION_KEY
+Authorization: Bearer SEU_JWT
+```
+
+O resultado pode ser `COMPLETED` ou `REJECTED`. Uma rejeição informa `rejection_reason`, como `INSUFFICIENT_FUNDS` ou `DESTINATION_LIMIT_EXCEEDED`.
+
+Repetições legítimas de operações finalizadas recebem `200` com o resultado existente.
+
+### Criação de cobrança
+
+Somente a conta profissional pode criar cobranças:
+
+```http
+POST /accounts/PROFESSIONAL_ACCOUNT_KEY/charges
+Authorization: Bearer JWT_DO_PROFISSIONAL
 Content-Type: application/json
 
 {
   "description": "Criação de site",
-  "amount": "120.00",
+  "amount": "100.00",
   "due_date": "2026-10-15"
 }
 ```
 
-`due_date` é opcional, usa `AAAA-MM-DD` e precisa ser uma data válida. Pode ser anterior à data atual para registrar um serviço já vencido. Sem vencimento, a resposta traz `due_date: null`. A resposta também inclui `charge_key`, estado `OPEN`, `overdue` e `payment_reference` no formato `charge:UUID`. Criar a cobrança não deposita dinheiro.
+A cobrança começa como `OPEN` e não altera o saldo. A resposta contém `charge_key` e `payment_reference`, no formato `charge:UUID`.
 
-Para listar cobranças:
+`due_date` é opcional e deve ser uma data válida no formato `AAAA-MM-DD`. Datas anteriores são aceitas para registrar serviços já vencidos.
 
-```http
-GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges?page=1&limit=20
-Authorization: Bearer SEU_JWT
-```
+### Pagamento de cobrança por outro cliente
 
-`page` aceita valores de 1 a 999999 e `limit` aceita valores de 1 a 100. Os padrões são `page=1` e `limit=20`.
-
-Para consultar os totais da conta profissional:
+O pagador informa uma conta própria, a chave da cobrança e uma chave nova de idempotência:
 
 ```http
-GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/summary
-Authorization: Bearer SEU_JWT
-```
-
-Exemplo de resposta:
-
-```json
-{
-  "account_key": "UUID_DA_CONTA_PROFISSIONAL",
-  "as_of_date": "2026-10-09",
-  "open": {"count": 3, "amount": "190.00"},
-  "overdue": {"count": 1, "amount": "50.00"},
-  "paid": {"count": 2, "amount": "150.00"}
-}
-```
-
-`as_of_date` é a data em São Paulo usada para avaliar vencimentos. `open` inclui as cobranças atrasadas; não some `open` e `overdue`. `paid` é o histórico de cobranças pagas, e não o saldo atual da conta. Os totais cobrem todas as cobranças da conta, mesmo quando a listagem é paginada.
-
-Para consultar uma cobrança:
-
-```http
-GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY
-Authorization: Bearer SEU_JWT
-```
-
-Depois da quitação, o titular da conta profissional pode consultar o comprovante:
-
-```http
-GET /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY/receipt
-Authorization: Bearer SEU_JWT
-```
-
-O JSON identifica a cobrança, a transação concluída e o crédito correspondente no extrato (`credit_entry_key`), além do valor recebido, saldo após aquele crédito e data da quitação. `payment_method` vale `KODAMA_TRANSFER` ou `SIMULATED_INTERNAL_DEPOSIT`. O comprovante não expõe os dados da conta do pagador; a tarifa, quando houver, é paga pelo pagador, não descontada do valor recebido pelo profissional. Cobranças em aberto retornam `409`; uma conta de outro cliente retorna `404`. Este comprovante descreve operações **simuladas no Kodama** e não comprova uma transferência bancária real.
-
-Para cancelar uma cobrança ainda aberta:
-
-```http
-POST /accounts/CHAVE_DA_CONTA_PROFISSIONAL/charges/CHARGE_KEY/cancel
-Authorization: Bearer SEU_JWT
-```
-
-A resposta `200` mostra `status: CANCELED` e `canceled_at`; repetir o cancelamento retorna a mesma cobrança. Uma cobrança paga responde `409`. O cancelamento não estorna pagamentos nem apaga o histórico. Todas as respostas de cobrança agora trazem `canceled_at: null` quando não há cancelamento.
-
-### Pagamento da cobrança por outro cliente
-
-O titular compartilha a `charge_key` com o pagador. O pagador autenticado escolhe **uma conta própria** como origem:
-
-```http
-POST /accounts/CHAVE_DA_CONTA_DO_PAGADOR/charge-payments
+POST /accounts/PAYER_ACCOUNT_KEY/charge-payments
 Authorization: Bearer JWT_DO_PAGADOR
 Content-Type: application/json
 
 {
-  "charge_key": "UUID_DA_COBRANCA",
-  "idempotency_key": "2b137445-6846-4381-b3ab-59042970f4f0"
+  "charge_key": "CHARGE_KEY",
+  "idempotency_key": "fc59c4fb-2062-4cba-ae86-c02574eec14d"
 }
 ```
 
-O valor é obtido da cobrança salva no banco; a requisição não aceita um valor escolhido pelo pagador. A resposta informa `transaction_key`, `status`, `amount`, `fee` e as chaves das contas de origem e destino.
+Valor e destino são obtidos da cobrança; o pagador não pode escolhê-los no corpo.
 
-Uma resposta `202` indica uma transferência `PENDING`. Consulte seu resultado usando:
+O pagamento é registrado como transferência `PENDING`. Consulte o resultado pela rota de transferências da conta do pagador.
 
-```http
-GET /accounts/CHAVE_DA_CONTA_DO_PAGADOR/transfers/TRANSACTION_KEY
-Authorization: Bearer JWT_DO_PAGADOR
-```
+Ao concluir, o worker confirma juntos:
 
-O worker pode concluir ou rejeitar a operação. Uma transferência rejeitada informa `rejection_reason`, não debita o pagador e deixa a cobrança `OPEN`, exceto quando outra operação já a pagou. Para tentar novamente após uma rejeição por falta de saldo, use **uma nova** `idempotency_key`.
+- Débito do valor e da tarifa na origem.
+- Crédito integral na conta profissional.
+- Lançamentos no extrato.
+- Transação `COMPLETED`.
+- Cobrança `PAID` e identificação do pagamento.
 
-Se o profissional cancelar uma cobrança com pagamento `PENDING`, o worker devolve `REJECTED` com `rejection_reason: CHARGE_CANCELED` sem debitar o pagador.
+O titular não pode pagar a própria cobrança. Tentativas concorrentes não podem quitá-la duas vezes.
 
-O pagamento usa a tarifa de transferência entre clientes: 0,5% do valor, limitada a R$ 2,00. O pagador precisa ter saldo para **valor mais tarifa**. O recebedor recebe o valor integral da cobrança. Repetir a mesma solicitação com a mesma chave recupera a operação anterior; usar essa chave com outros dados gera conflito.
+Uma rejeição por falta de saldo mantém a cobrança aberta. Uma nova tentativa exige outra chave de idempotência.
 
 ### Quitação por depósito interno
 
-Para simular um recebimento externo, uma operação interna usa **a referência devolvida na criação** e envia o valor exato:
+Uma operação interna pode simular um recebimento externo:
 
 ```http
-POST /accounts/CHAVE_DA_CONTA_PROFISSIONAL/deposits
-INTERNAL-TOKEN: SEU_TOKEN_LOCAL
+POST /accounts/PROFESSIONAL_ACCOUNT_KEY/deposits
+INTERNAL-TOKEN: SEU_TOKEN_INTERNO
 Content-Type: application/json
 
 {
-  "amount": "120.00",
-  "external_reference": "charge:UUID_DA_COBRANCA"
+  "amount": "100.00",
+  "external_reference": "charge:CHARGE_KEY"
 }
 ```
 
-Após esse depósito, a consulta da cobrança retorna `PAID`, `paid_at` e `overdue: false`; o crédito pode ser visto no extrato. O JWT do cliente não autoriza depósitos. Repetir o depósito com a mesma referência e os mesmos dados não credita novamente.
+Conta, valor e referência precisam corresponder à cobrança aberta. O crédito e a quitação são confirmados juntos.
 
-Cada chamada de criação de cobrança registra **uma nova cobrança**. A proteção contra repetição se aplica às tentativas de pagamento, conforme as chaves informadas em cada operação.
+Se esse depósito quitar a cobrança antes de uma transferência pendente, o worker rejeita a transferência sem debitar o pagador.
 
-### Solicitação de transferência comum
+Esse fluxo não consulta nem comprova liquidação por uma instituição externa.
+
+### Cancelamento de cobrança
 
 ```http
-POST /accounts/CHAVE_DA_CONTA_DE_ORIGEM/transfers
-Authorization: Bearer SEU_JWT
+POST /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/CHARGE_KEY/cancel
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+Somente cobranças `OPEN` podem ser canceladas. A resposta `200` informa `CANCELED` e `canceled_at`.
+
+Repetir o cancelamento mantém a data original. Cobranças `PAID` ou `REFUNDED` retornam `409`.
+
+Se o cancelamento vencer a disputa com um pagamento pendente, o worker rejeita esse pagamento com `CHARGE_CANCELED`, sem movimentação financeira.
+
+Cancelar não devolve dinheiro e não apaga registros.
+
+### Estorno de pagamento
+
+O profissional pode solicitar a devolução integral de uma cobrança paga por transferência de outro cliente Kodama:
+
+```http
+POST /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/CHARGE_KEY/refunds
+Authorization: Bearer JWT_DO_PROFISSIONAL
 Content-Type: application/json
 
 {
-  "amount": "40.00",
-  "destination_account_key": "CHAVE_DA_CONTA_DE_DESTINO",
-  "idempotency_key": "2b137445-6846-4381-b3ab-59042970f4f0"
+  "idempotency_key": "acec1fb7-3568-4db0-94e0-6e136b8072af"
 }
 ```
 
-O valor é uma string decimal com duas casas. A transferência é registrada como `PENDING` e processada pelo worker. Repetir a solicitação com a mesma chave e os mesmos dados recupera a mesma operação; alterar os dados mantendo a chave gera conflito. Uma chave usada em pagamento de cobrança não pode ser reutilizada como transferência comum na mesma conta de origem.
+O corpo aceita somente `idempotency_key`. Valor, pagamento original e destino são obtidos dos registros existentes.
 
-A tarifa é calculada na solicitação, mas **só é debitada quando a transferência é concluída**.
+A resposta `202` informa uma transação `REFUND` no estado `PENDING`. Consulte:
+
+```http
+GET /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/CHARGE_KEY/refunds/TRANSACTION_KEY
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+Regras do estorno:
+
+- É integral e limitado a uma devolução concluída por pagamento original.
+- Devolve o valor à conta que originalmente pagou a cobrança.
+- Não cobra nova tarifa.
+- Não devolve a tarifa do pagamento original.
+- Exige saldo suficiente na conta profissional e respeita o limite da conta de destino.
+- Preserva a transação original, seus lançamentos e seu comprovante.
+- Cria uma nova transação e novos lançamentos de débito e crédito.
+- A cobrança permanece `PAID` enquanto o estorno estiver pendente ou rejeitado.
+- Somente a conclusão a torna `REFUNDED`, com identificação e data do estorno.
+- Estornos concorrentes não podem devolver o valor duas vezes.
+
+Uma rejeição não movimenta dinheiro. Após resolver sua causa, outra tentativa pode ser solicitada com uma nova chave.
+
+Após a conclusão, repetir a chave original recupera o estorno; uma chave nova recebe `409`. A repetição de uma tentativa anteriormente rejeitada continua recuperando aquela rejeição.
+
+Cobranças quitadas por depósito interno não são elegíveis: esse fluxo não identifica uma conta pagadora Kodama para receber a devolução. Estornos parciais também não fazem parte desta versão.
+
+Exemplo: um pagamento de R$ 100,00 exige R$ 100,50 do pagador. Após a quitação, o profissional recebe R$ 100,00. Se o estorno concluir, R$ 100,00 voltam ao pagador; a tarifa original de R$ 0,50 permanece registrada.
+
+### Comprovantes
+
+Comprovante do pagamento original:
+
+```http
+GET /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/CHARGE_KEY/receipt
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+O JSON identifica cobrança, transação e lançamento de crédito, além de valor recebido, saldo após o crédito, data e método de pagamento.
+
+Esse comprovante permanece disponível após um estorno e continua descrevendo o pagamento original. Ele não expõe a conta do pagador.
+
+Comprovante do estorno:
+
+```http
+GET /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/CHARGE_KEY/refunds/TRANSACTION_KEY/receipt
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+O JSON identifica:
+
+- Cobrança e transação de estorno.
+- Transação original.
+- Contas de origem e destino da devolução.
+- Valor devolvido e tarifa original mantida.
+- Lançamentos de débito e crédito.
+- Saldos após esses lançamentos e data da conclusão.
+
+O comprovante de estorno só está disponível quando a devolução foi concluída. Operações pendentes ou rejeitadas recebem `409`; inconsistências nos registros impedem sua emissão.
+
+Os comprovantes exigem o JWT do titular da conta profissional e utilizam `Cache-Control: no-store`. Descrevem operações simuladas dentro do Kodama.
 
 ### Extrato
 
 ```http
-GET /accounts/SUA_CHAVE_DE_CONTA/entries?page=1&limit=20&kind=FEE
+GET /accounts/ACCOUNT_KEY/entries?page=1&limit=20
 Authorization: Bearer SEU_JWT
 ```
-
-Todos os parâmetros são opcionais:
 
 | Parâmetro | Valores | Padrão |
 | --- | --- | --- |
@@ -372,78 +466,209 @@ Todos os parâmetros são opcionais:
 | `limit` | Inteiro de 1 a 100 | `20` |
 | `kind` | `CREDIT`, `DEBIT` ou `FEE` | Todos |
 
-Exemplo de resposta:
+Os lançamentos incluem `entry_key`, `transaction_key`, `transaction_kind`, `kind`, `amount`, `balance_after` e `created_at`.
+
+`transaction_kind` distingue depósitos, transferências e estornos: `DEPOSIT`, `TRANSFER` ou `REFUND`. Ele é um campo da resposta, não um filtro de consulta.
+
+Créditos são positivos; débitos e tarifas são negativos. `balance_after` representa o saldo após aquele lançamento, não necessariamente o saldo atual.
+
+Operações pendentes ou rejeitadas não aparecem no extrato porque não geram lançamentos.
+
+### Cobranças e resumo de recebíveis
+
+```http
+GET /accounts/PROFESSIONAL_ACCOUNT_KEY/charges?page=1&limit=20
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+A listagem utiliza os mesmos limites de paginação do extrato e informa `has_more`.
+
+Para consultar os totais:
+
+```http
+GET /accounts/PROFESSIONAL_ACCOUNT_KEY/charges/summary
+Authorization: Bearer JWT_DO_PROFISSIONAL
+```
+
+Exemplo:
 
 ```json
 {
-  "account_key": "UUID_DA_CONTA",
-  "page": 1,
-  "limit": 20,
-  "has_more": false,
-  "entries": [
-    {
-      "entry_key": "UUID_DO_LANCAMENTO",
-      "transaction_key": "UUID_DA_TRANSACAO",
-      "transaction_kind": "TRANSFER",
-      "kind": "FEE",
-      "amount": "-0.20",
-      "balance_after": "59.80",
-      "created_at": "2026-10-02T03:00:00"
-    }
-  ]
+  "account_key": "UUID_DA_CONTA_PROFISSIONAL",
+  "as_of_date": "2026-10-12",
+  "open": {"count": 3, "amount": "190.00"},
+  "overdue": {"count": 1, "amount": "50.00"},
+  "paid": {"count": 2, "amount": "150.00"},
+  "refunded": {"count": 1, "amount": "100.00"}
 }
 ```
 
-`CREDIT` aumenta o saldo; `DEBIT` e `FEE` aparecem com valor negativo. `balance_after` é o saldo após aquele lançamento. Transferências pendentes ou rejeitadas não aparecem no extrato porque não geraram lançamentos.
+- `open`: cobranças atualmente abertas.
+- `overdue`: subconjunto das abertas com vencimento anterior à data de referência.
+- `paid`: cobranças atualmente pagas, sem estorno concluído.
+- `refunded`: cobranças cujo pagamento foi devolvido.
+- `as_of_date`: data em São Paulo usada para avaliar os vencimentos.
+
+Não some `open` com `overdue`, pois os atrasados já estão incluídos nos abertos.
+
+Os totais abrangem todas as cobranças da conta, independentemente da paginação. Cobranças canceladas não participam desses grupos.
+
+`paid` e `refunded` representam valores de cobranças, não o saldo disponível da conta.
 
 ### Conciliação interna
 
 ```http
-GET /internal/accounts/CHAVE_DA_CONTA/reconciliation
-INTERNAL-TOKEN: SEU_TOKEN_LOCAL
+GET /internal/accounts/ACCOUNT_KEY/reconciliation
+INTERNAL-TOKEN: SEU_TOKEN_INTERNO
 ```
 
-Exemplo de resposta para uma conta sem divergências:
+Exemplo após uma cobrança de R$ 100,00 ser paga e estornada, sem outras movimentações na conta profissional:
 
 ```json
 {
   "account_key": "UUID_DA_CONTA",
-  "balance": "120.00",
-  "ledger_balance": "120.00",
+  "balance": "0.00",
+  "ledger_balance": "0.00",
   "paid_charges_checked": 1,
+  "refunded_charges_checked": 1,
   "consistent": true,
   "issues": []
 }
 ```
 
-`ledger_balance` é a soma dos valores dos lançamentos da conta. A verificação das cobranças pagas confere a transação concluída e o crédito ligados a cada cobrança. Possíveis tipos de divergência são `BALANCE_MISMATCH`, `CHARGE_TRANSACTION_MISMATCH` e `CHARGE_CREDIT_MISMATCH`.
+A conciliação verifica:
 
-Essa rota é destinada a diagnóstico interno. Ela não modifica registros, não repara divergências automaticamente e não consulta instituições de pagamento externas.
+- Saldo armazenado contra a soma dos lançamentos da conta.
+- Pagamentos originais de cobranças `PAID` e `REFUNDED`.
+- Transação e crédito associados ao pagamento.
+- Ligação entre estorno, cobrança e pagamento original.
+- Direção, valor, tarifa zero e data do estorno concluído.
+- Existência dos dois lançamentos esperados para a devolução.
+
+Os estornos são conferidos tanto na consulta da conta profissional quanto na da conta pagadora envolvida.
+
+`paid_charges_checked` inclui pagamentos originais preservados após estorno. `refunded_charges_checked` informa as cobranças estornadas verificadas para a conta.
+
+Possíveis divergências:
+
+- `BALANCE_MISMATCH`
+- `CHARGE_TRANSACTION_MISMATCH`
+- `CHARGE_CREDIT_MISMATCH`
+- `CHARGE_REFUND_TRANSACTION_MISMATCH`
+- `CHARGE_REFUND_ENTRIES_MISMATCH`
+
+A consulta utiliza isolamento `REPEATABLE READ` e uma transação somente de leitura. Isso evita comparar registros de momentos diferentes enquanto outra operação é confirmada.
+
+Divergências retornam `200` com `consistent: false` e detalhes em `issues`. A conciliação não modifica registros, não corrige valores automaticamente e não consulta instituições externas.
+
+## Erros
+
+Os erros seguem um formato comum:
+
+```json
+{
+  "title": "Refund receipt unavailable",
+  "description": "A receipt is available only after the refund is completed.",
+  "translation": "O comprovante fica disponível somente após a conclusão do estorno.",
+  "code": "KOD008004"
+}
+```
+
+Os códigos distinguem situações de negócio dentro do mesmo status HTTP.
+
+Respostas frequentes:
+
+| Status | Situação |
+| --- | --- |
+| `400` | Corpo, parâmetro, data ou UUID inválido |
+| `401` | JWT ausente, inválido ou expirado; credenciais incorretas |
+| `403` | Token interno ausente ou incorreto |
+| `404` | Registro inexistente ou inacessível ao cliente |
+| `409` | Conflito de idempotência ou estado incompatível |
+| `422` | Regra de negócio inválida, como CPF inválido ou valor zero |
+| `500` | Falha técnica ou inconsistência que impede a operação |
+
+Saldo insuficiente durante o processamento assíncrono gera uma transação `REJECTED`; sua consulta retorna `200` com o resultado e o motivo.
+
+## Logs
+
+A API registra entrada e saída das requisições, método, rota, status, duração e identificador da requisição. O corpo da requisição não é registrado pelo middleware de logs.
+
+O identificador é devolvido no cabeçalho `x-request-id`.
+
+O worker registra identificadores das operações processadas, resultados e falhas técnicas. Após uma falha técnica, utiliza espera progressiva entre tentativas, limitada a 60 segundos.
+
+Para consultar:
+
+```bash
+docker compose logs --tail=100 api worker
+```
 
 ## Testes
 
-Com a API e o banco saudáveis, ative o ambiente Python 3.11. No Git Bash do Windows:
+Na validação local desta versão:
+
+- 103 testes de integração e unidade aprovados.
+- 6 testes de ponta a ponta aprovados.
+
+### Preparar o ambiente
+
+No Git Bash do Windows, usando Python 3.11:
 
 ```bash
+py -3.11 -m venv .venv
 source .venv/Scripts/activate
+python -m pip install -r requirements-dev.txt
 ```
 
-Pare o worker antes dos testes de integração: alguns testes precisam observar uma transferência no estado `PENDING` e processá-la diretamente, de forma controlada.
+Se o ambiente já existe, basta ativá-lo.
+
+Em Linux/macOS, crie o ambiente com `python3.11 -m venv .venv` e ative com `source .venv/bin/activate`.
+
+### Executar a suíte
+
+Integração e unidade precisam do worker parado: alguns testes observam `PENDING` e chamam o processador de forma controlada.
 
 ```bash
+docker compose up -d --build --wait db api
 docker compose stop worker
+
 PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/integration tests/unit
-docker compose start worker
+```
+
+Para os testes de ponta a ponta, ligue o worker:
+
+```bash
+docker compose up -d --build --wait worker
+
 PYTHONPATH=src SERVER_LOCALHOST=127.0.0.1 python -m pytest -q tests/e2e
 ```
 
-Os testes cobrem criação de clientes, autenticação, contas, depósitos, transferências e extrato. Para cobranças, verificam criação sem movimentação financeira, isolamento entre clientes, vencimento, resumo de recebíveis, quitação por depósito, pagamento por outro cliente e cancelamento de cobranças abertas.
+Os E2E exercitam a API e o worker real. Os testes de recuperação param e reiniciam o serviço `worker`; execute a suíte sem outras operações concorrentes que dependam desse serviço.
 
-Os testes de pagamento verificam tarifa, saldos, lançamentos, idempotência, falta de saldo, concorrência entre pagadores, depósito que quita uma cobrança ainda com transferência pendente e rollback após falha técnica. Os testes de cancelamento verificam cobranças pagas, novas tentativas de pagamento, transferências pendentes e a corrida entre cancelamento e processamento. A jornada de ponta a ponta verifica o processamento pelo worker e a conciliação das duas contas após o pagamento.
+### Cobertura de cenários
 
-Na CI, os testes de integração e unidade rodam antes de iniciar o worker; os testes de ponta a ponta rodam depois, com os três serviços ligados.
+Os testes verificam:
 
-Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rotina recria apenas o esquema inicial e pode remover tabelas acrescentadas pelas migrações.
+- Cadastro, duplicidades, validação de CPF e autenticação.
+- JWT inválido, adulterado ou expirado e isolamento entre clientes.
+- Depósitos repetidos e conflitos de referência.
+- Tarifas, falta de saldo e limite da conta de destino.
+- Extrato, paginação, vencimentos e resumo de recebíveis.
+- Pagamento e cancelamento de cobranças.
+- Concorrência entre pagamentos e entre estornos.
+- Solicitações HTTP simultâneas com a mesma chave de idempotência.
+- Conflitos de chave entre transferências, pagamentos e estornos.
+- Rejeição de pedidos que tentam alterar valor ou destino da devolução.
+- Rollback após falha técnica e nova tentativa.
+- Preservação do pagamento original, da tarifa e dos comprovantes.
+- Detecção de divergências reais introduzidas temporariamente no banco.
+- Retomada de transferências e estornos pendentes após indisponibilidade do worker.
+- Repetição após reinicialização sem duplicação financeira.
+
+A CI executa integração e unidade antes de iniciar o worker e executa os E2E depois. O banco é inicializado do zero no ambiente da CI.
+
+Não utilize `DbUtils.rollback()` para recriar o banco das funcionalidades novas: essa rotina representa o esquema inicial e pode remover tabelas acrescentadas por migrações.
 
 ## Organização do código
 
@@ -451,17 +676,20 @@ Não execute `DbUtils.rollback()` nos testes das funcionalidades novas: essa rot
 | --- | --- |
 | `src/resources` | Recebe requisições HTTP e monta respostas |
 | `src/controllers` | Aplica regras de negócio e coordena operações |
-| `src/repositories` | Faz consultas e persistência no PostgreSQL |
+| `src/repositories` | Consulta e persiste dados no PostgreSQL |
 | `src/models` | Representa as tabelas no código |
-| `src/schemas` | Valida corpos de requisição e parâmetros |
-| `src/errors` | Define erros de negócio e suas respostas HTTP |
+| `src/schemas` | Valida corpos e parâmetros |
+| `src/errors` | Define erros e respostas de negócio |
 | `src/middlewares` | Cuida de contexto, logs, sessão e token interno |
-| `src/workers` | Processa transferências pendentes fora da requisição HTTP |
-| `database` | Define o esquema inicial e as migrações SQL |
-| `tests` | Verifica regras isoladas e fluxos por HTTP |
+| `src/utils` | Reúne funções compartilhadas de validação, autenticação e valores |
+| `src/workers` | Busca e processa transferências e estornos pendentes |
+| `database` | Contém o esquema inicial e as migrações SQL |
+| `tests/unit` | Verifica regras isoladas |
+| `tests/integration` | Verifica API, banco e processamento controlado |
+| `tests/e2e` | Verifica jornadas por HTTP com o worker real |
 
-## Estado do projeto
+## Escopo desta versão
 
-O núcleo bancário e o fluxo simulado de valores a receber para profissionais autônomos estão implementados e testados. O produto permite registrar um serviço, acompanhar o vencimento, cancelar uma cobrança ainda aberta, receber o pagamento de outro cliente Kodama ou simular um recebimento externo, consultar saldos e extratos e verificar a consistência dos registros internos.
+O projeto implementa operações bancárias simuladas e o ciclo de cobranças para profissionais autônomos: registrar, acompanhar, receber, cancelar cobranças abertas e devolver pagamentos elegíveis, preservando o histórico.
 
-Pagamentos externos reais, emissão de boletos, Pix e documentos fiscais estão fora do escopo desta versão.
+Pix, boletos, integrações financeiras reais, documentos fiscais, estornos parciais e devoluções de depósitos externos simulados ficam fora do escopo.

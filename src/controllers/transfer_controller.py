@@ -50,7 +50,8 @@ class TransferController(BaseController):
         )
 
         if (
-            saved_destination is None
+            existing.kind != "TRANSFER"
+            or saved_destination is None
             or saved_destination.account_key != destination_account_key
             or existing.amount != amount
             or existing.service_charge_id is not None

@@ -35,7 +35,8 @@ class ChargePaymentController(BaseController):
         self, existing, source, destination, charge
     ) -> dict:
         if (
-            existing.service_charge_id != charge.id
+            existing.kind != "TRANSFER"
+            or existing.service_charge_id != charge.id
             or existing.destination_account_id != destination.id
             or existing.amount != charge.amount
         ):
